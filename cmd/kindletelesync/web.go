@@ -65,6 +65,9 @@ func authorized(r *http.Request, token string) bool {
 }
 
 func runWebServer(kindleUI bool) Result {
+	if kindleUI {
+		_ = os.Remove(tokenPath())
+	}
 	token, err := webToken()
 	if err != nil {
 		return failure("web", "Failed to initialize web access token", err)
@@ -74,6 +77,7 @@ func runWebServer(kindleUI bool) Result {
 		return failure("web", "Failed to load configuration", err)
 	}
 	url := webURL(token)
+	defer os.Remove(tokenPath())
 
 	if err := os.WriteFile(webPIDPath(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0600); err != nil {
 		return failure("web", "Failed to write web server PID", err)
@@ -278,6 +282,7 @@ func stopWebServer() Result {
 	b, err := os.ReadFile(webPIDPath())
 	if err != nil {
 		if os.IsNotExist(err) {
+			_ = os.Remove(tokenPath())
 			return Result{OK: true, Action: "web-stop", Message: "Web settings server is not running."}
 		}
 		return failure("web-stop", "Failed to read web server PID", err)
@@ -289,12 +294,22 @@ func stopWebServer() Result {
 	}
 	if !processExists(pid) {
 		_ = os.Remove(webPIDPath())
+		_ = os.Remove(tokenPath())
 		return Result{OK: true, Action: "web-stop", Message: "Removed stale web server PID file."}
 	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		return failure("web-stop", "Failed to stop web settings server", err)
 	}
-	return Result{OK: true, Action: "web-stop", Message: fmt.Sprintf("Stop signal sent to web settings server (PID %d).", pid)}
+	deadline := time.Now().Add(3 * time.Second)
+	for processExists(pid) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if processExists(pid) {
+		return failure("web-stop", "Web settings server did not stop in time", fmt.Errorf("PID %d is still running", pid))
+	}
+	_ = os.Remove(webPIDPath())
+	_ = os.Remove(tokenPath())
+	return Result{OK: true, Action: "web-stop", Message: fmt.Sprintf("Web settings server stopped (PID %d).", pid)}
 }
 
 func addIptablesRule() bool {
