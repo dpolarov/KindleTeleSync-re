@@ -63,6 +63,26 @@ func TestEffectiveGOARMBuildValue(t *testing.T) {
 	}
 }
 
+func TestCompareVersions(t *testing.T) {
+	tests := []struct {
+		current string
+		latest  string
+		want    int
+	}{
+		{"1.2.5", "1.2.5", 0},
+		{"1.2.5", "1.3.0-rc1", -1},
+		{"1.3.0-rc1", "1.3.0-rc2", -1},
+		{"1.3.0-rc2", "1.3.0-rc1", 1},
+		{"1.3.0-rc1", "1.2.5", 1},
+		{"1.3.0", "1.3.0-rc2", 1},
+	}
+	for _, tc := range tests {
+		if got := compareVersions(tc.current, tc.latest); got != tc.want {
+			t.Fatalf("compareVersions(%q, %q) = %d, want %d", tc.current, tc.latest, got, tc.want)
+		}
+	}
+}
+
 func TestEnsureWritableDirectoryRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
