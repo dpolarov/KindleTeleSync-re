@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -15,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/antikuz/KindleTeleSync-re/internal/config"
 	"github.com/beevik/ntp"
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
+	"github.com/dpolarov/KindleTeleSync-re/internal/config"
 	"github.com/gotd/td/telegram/dcs"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/message"
@@ -28,49 +29,36 @@ import (
 )
 
 const (
-	// Default open source Telegram App ID/Hash
 	appID   = 2040
 	appHash = "b18441a1ff607e10a989891a5462e627"
 )
 
 func init() {
-	log.SetFlags(0)
-	log.SetPrefix(fmt.Sprintf("[%s] ", time.Now().Format("2006-01-02 15:04:05")))
+	log.SetFlags(log.Ldate | log.Ltime)
 }
 
-// mtproto highly depends on correct date
 func syncClock() {
-    servers := []string{
-		"ru.pool.ntp.org",
-        "pool.ntp.org",
-        "time.cloudflare.com", 
-        "time.google.com",
-    }
-    
-    for _, server := range servers {
-        t, err := ntp.Time(server)
-        if err != nil {
-            log.Printf("NTP %s failed: %v", server, err)
-            continue
-        }
-        
-        tv := syscall.NsecToTimeval(t.UnixNano())
-        if err := syscall.Settimeofday(&tv); err != nil {
-            log.Printf("Settimeofday failed: %v", err)
-            return
-        }
-        
-        log.Printf("Clock synced via %s", server)
-        return
-    }
-    
-    log.Printf("All NTP servers failed, continuing with system time")
+	servers := []string{"pool.ntp.org", "time.cloudflare.com", "time.google.com"}
+	for _, server := range servers {
+		t, err := ntp.Time(server)
+		if err != nil {
+			log.Printf("NTP %s failed: %v", server, err)
+			continue
+		}
+		tv := syscall.NsecToTimeval(t.UnixNano())
+		if err := syscall.Settimeofday(&tv); err != nil {
+			log.Printf("Cannot set system clock: %v", err)
+			return
+		}
+		log.Printf("Clock synchronized via %s", server)
+		return
+	}
+	log.Printf("All NTP servers failed; continuing with the current system time")
 }
 
-// handles all MTProto, SOCKS5, and HTTP proxy logic
-func setupResolver(cfg *config.Config) dcs.Resolver {
+func setupResolver(cfg *config.Config) (dcs.Resolver, error) {
 	if !cfg.Proxy.Enabled {
-		return dcs.DefaultResolver()
+		return dcs.DefaultResolver(), nil
 	}
 
 	switch cfg.Proxy.Type {
@@ -80,14 +68,9 @@ func setupResolver(cfg *config.Config) dcs.Resolver {
 			secret, err = base64.RawURLEncoding.DecodeString(cfg.Proxy.MTProtoSecret)
 		}
 		if err != nil || len(secret) == 0 {
-			log.Fatalf("Invalid MTProxy secret format")
+			return nil, fmt.Errorf("invalid MTProto proxy secret")
 		}
-		resolver, err := dcs.MTProxy(cfg.Proxy.Address, secret, dcs.MTProxyOptions{})
-		if err != nil {
-			log.Fatalf("MTProxy config error: %v", err)
-		}
-		return resolver
-
+		return dcs.MTProxy(cfg.Proxy.Address, secret, dcs.MTProxyOptions{})
 	case "socks5":
 		var auth *proxy.Auth
 		if cfg.Proxy.Username != "" || cfg.Proxy.Password != "" {
@@ -95,47 +78,51 @@ func setupResolver(cfg *config.Config) dcs.Resolver {
 		}
 		dialer, err := proxy.SOCKS5("tcp", cfg.Proxy.Address, auth, proxy.Direct)
 		if err != nil {
-			log.Fatalf("SOCKS5 config error: %v", err)
+			return nil, fmt.Errorf("configure SOCKS5 proxy: %w", err)
 		}
-		return dcs.Plain(dcs.PlainOptions{
-			Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.Dial(network, addr)
-			},
-		})
-
+		return dcs.Plain(dcs.PlainOptions{Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.Dial(network, addr)
+		}}), nil
 	case "http":
-		return dcs.Plain(dcs.PlainOptions{
-			Dial: httpProxyDialer(cfg.Proxy.Address, cfg.Proxy.Username, cfg.Proxy.Password),
-		})
+		return dcs.Plain(dcs.PlainOptions{Dial: httpProxyDialer(cfg.Proxy.Address, cfg.Proxy.Username, cfg.Proxy.Password)}), nil
+	default:
+		return nil, fmt.Errorf("unsupported proxy type %q", cfg.Proxy.Type)
 	}
-	return dcs.DefaultResolver()
 }
 
-func httpProxyDialer(proxyAddr, user, pass string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func httpProxyDialer(proxyAddr, user, pass string) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		conn, err := net.Dial(network, proxyAddr)
+		d := net.Dialer{Timeout: 30 * time.Second}
+		conn, err := d.DialContext(ctx, network, proxyAddr)
 		if err != nil {
 			return nil, err
 		}
-		req := &http.Request{
-			Method: "CONNECT",
-			URL:    &url.URL{Opaque: addr},
-			Host:   addr,
-			Header: make(http.Header),
-		}
+		ok := false
+		defer func() {
+			if !ok {
+				_ = conn.Close()
+			}
+		}()
+
+		req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: addr}, Host: addr, Header: make(http.Header)}
 		if user != "" || pass != "" {
-			auth := user + ":" + pass
-			req.Header.Add("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(auth)))
+			auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+			req.Header.Set("Proxy-Authorization", "Basic "+auth)
 		}
 		if err := req.Write(conn); err != nil {
 			return nil, err
 		}
-
-		br := make([]byte, 1024)
-		_, err = conn.Read(br)
-		if err != nil || !strings.Contains(string(br), "200") {
-			return nil, fmt.Errorf("HTTP Proxy error: %v", string(br))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+		if err != nil {
+			return nil, fmt.Errorf("read HTTP proxy response: %w", err)
 		}
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("HTTP proxy CONNECT failed: %s", resp.Status)
+		}
+		ok = true
 		return conn, nil
 	}
 }
@@ -143,21 +130,19 @@ func httpProxyDialer(proxyAddr, user, pass string) func(ctx context.Context, net
 func getUniqueFilename(baseDir, filename string) string {
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)
-	outPath := filepath.Join(baseDir, filename)
-
+	out := filepath.Join(baseDir, filename)
 	for counter := 1; ; counter++ {
-		if _, err := os.Stat(outPath); os.IsNotExist(err) {
-			break
+		if _, err := os.Stat(out); os.IsNotExist(err) {
+			return out
 		}
-		outPath = filepath.Join(baseDir, fmt.Sprintf("%s_%d%s", base, counter, ext))
+		out = filepath.Join(baseDir, fmt.Sprintf("%s_%d%s", base, counter, ext))
 	}
-	return outPath
 }
 
 func getFilename(doc *tg.Document) string {
 	for _, attr := range doc.Attributes {
 		if nameAttr, ok := attr.(*tg.DocumentAttributeFilename); ok {
-			return nameAttr.FileName
+			return filepath.Base(nameAttr.FileName)
 		}
 	}
 	return ""
@@ -178,27 +163,21 @@ func getPeerID(peer interface{}) int64 {
 
 func isAllowedExt(filename string, allowed []string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	for _, aExt := range allowed {
-		if strings.ToLower(strings.TrimSpace(aExt)) == ext {
+	for _, allowedExt := range allowed {
+		if strings.ToLower(strings.TrimSpace(allowedExt)) == ext {
 			return true
 		}
 	}
 	return false
 }
 
-func processMessages(ctx context.Context, api *tg.Client, sender *message.Sender, dl *downloader.Downloader, messages []tg.MessageClass, peer tg.InputPeerClass, cfg *config.Config) {
-	successDownloads := []string{}
-	failedDownloads := []string{}
-	for _, m := range messages {
-		msg, ok := m.(*tg.Message)
-		if !ok {
+func processMessages(ctx context.Context, api *tg.Client, sender *message.Sender, dl *downloader.Downloader, messages []tg.MessageClass, peer *tg.InputPeerUser, cfg *config.Config) {
+	var successDownloads, failedDownloads []string
+	for _, item := range messages {
+		msg, ok := item.(*tg.Message)
+		if !ok || getPeerID(msg.PeerID) != peer.UserID {
 			continue
 		}
-
-		if getPeerID(msg.PeerID) != peer.(*tg.InputPeerUser).UserID {
-			continue
-		}
-
 		media, ok := msg.Media.(*tg.MessageMediaDocument)
 		if !ok {
 			continue
@@ -207,42 +186,31 @@ func processMessages(ctx context.Context, api *tg.Client, sender *message.Sender
 		if !ok {
 			continue
 		}
-
 		filename := getFilename(doc)
 		if filename == "" || !isAllowedExt(filename, cfg.AllowedExtensions) {
 			continue
 		}
-
 		outPath := getUniqueFilename(cfg.DownloadPath, filename)
-		loc := doc.AsInputDocumentFileLocation()
-
-		if _, err := dl.Download(api, loc).ToPath(ctx, outPath); err != nil {
+		if _, err := dl.Download(api, doc.AsInputDocumentFileLocation()).ToPath(ctx, outPath); err != nil {
 			log.Printf("Failed to download %s: %v", filename, err)
 			failedDownloads = append(failedDownloads, filename)
 			continue
 		}
-
 		log.Printf("Downloaded: %s", outPath)
 		successDownloads = append(successDownloads, filename)
 	}
 
-	text := ""
+	var parts []string
 	if len(successDownloads) > 0 {
-		text = fmt.Sprintf("Сохранено %d файлов:\n\n<code>%s</code> \n\n", len(successDownloads), strings.Join(successDownloads, "\n"))
+		parts = append(parts, fmt.Sprintf("Saved %d file(s):\n\n<code>%s</code>", len(successDownloads), strings.Join(successDownloads, "\n")))
 	}
-
 	if len(failedDownloads) > 0 {
-		if len(successDownloads) > 0 {
-			text += "\n\n"
-		}
-		text += fmt.Sprintf("Ошибки скачивания %d файлов:\n\n<code>%s</code>\n\n", len(failedDownloads), strings.Join(failedDownloads, "\n"))
+		parts = append(parts, fmt.Sprintf("Failed to download %d file(s):\n\n<code>%s</code>", len(failedDownloads), strings.Join(failedDownloads, "\n")))
 	}
-
-	if text == "" {
+	if len(parts) == 0 {
 		return
 	}
-
-	if _, err := sender.To(peer).StyledText(ctx, html.String(nil, text)); err != nil {
+	if _, err := sender.To(peer).StyledText(ctx, html.String(nil, strings.Join(parts, "\n\n"))); err != nil {
 		log.Printf("Failed to send notification: %v", err)
 	}
 }
@@ -250,63 +218,47 @@ func processMessages(ctx context.Context, api *tg.Client, sender *message.Sender
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-
 	syncClock()
-	
-	rootPath := config.DefaultConfig().RootPath
-	if p := os.Getenv("KINDLE_ROOT"); p != "" {
-		rootPath = p
-	}
 
-    workingDirPath := filepath.Join(rootPath, "extensions/KindleTeleSync")
-	configPath := filepath.Join(workingDirPath, "config.json")
+	configPath := config.ConfigPath()
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-
-	if _, err := os.Stat(cfg.DownloadPath); os.IsNotExist(err) {
-		if err = os.MkdirAll(cfg.DownloadPath, 0755); err != nil {
-			log.Fatalf("Failed to create %s directory: %v", cfg.DownloadPath, err)
-		}
+	if err := cfg.ValidateForSync(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if err := os.MkdirAll(cfg.DownloadPath, 0755); err != nil {
+		log.Fatalf("Failed to create download directory: %v", err)
 	}
 
+	resolver, err := setupResolver(cfg)
+	if err != nil {
+		log.Fatalf("Proxy configuration error: %v", err)
+	}
 	type clientResult struct {
 		client *gotgproto.Client
 		err    error
 	}
 	ch := make(chan clientResult, 1)
-
-	opts := &gotgproto.ClientOpts{
-		InMemory:         true,
-		Session:          sessionMaker.SimpleSession(),
-		Resolver:         setupResolver(cfg),
-		DialTimeout:      90 * time.Second,
-		DisableCopyright: true,
-	}
+	opts := &gotgproto.ClientOpts{InMemory: true, Session: sessionMaker.SimpleSession(), Resolver: resolver, DialTimeout: 90 * time.Second, DisableCopyright: true}
 	go func() {
-		c, err := gotgproto.NewClient(
-			appID,
-			appHash,
-			gotgproto.ClientTypeBot(cfg.BotToken),
-			opts,
-		)
-		ch <- clientResult{c, err}
+		client, err := gotgproto.NewClient(appID, appHash, gotgproto.ClientTypeBot(cfg.BotToken), opts)
+		ch <- clientResult{client: client, err: err}
 	}()
 
 	var client *gotgproto.Client
 	select {
 	case <-ctx.Done():
-		log.Fatalf("Timeout waiting for bot login: %v", ctx.Err())
-	case res := <-ch:
-		if res.err != nil {
-			log.Fatalf("Bot login failed: %v", res.err)
+		log.Fatalf("Timed out waiting for Telegram login: %v", ctx.Err())
+	case result := <-ch:
+		if result.err != nil {
+			log.Fatalf("Telegram login failed: %v", result.err)
 		}
-		client = res.client
+		client = result.client
 	}
 	defer client.Stop()
 
-	log.Println("Bot logged in successfully.")
 	api := client.API()
 	sender := message.NewSender(api)
 	peer := &tg.InputPeerUser{UserID: cfg.ChatID, AccessHash: 0}
@@ -314,70 +266,48 @@ func main() {
 	if cfg.UpdatesState.Pts == 0 {
 		state, err := api.UpdatesGetState(ctx)
 		if err != nil {
-			log.Fatalf("Failed to get state: %v", err)
+			log.Fatalf("Failed to get Telegram state: %v", err)
 		}
-
-		log.Printf("First run: initializing PTS state to %d", state.Pts)
-		cfg.UpdatesState = config.TelegramUpdatesState{
-			Pts:  state.Pts,
-			Date: state.Date,
-			Qts:  state.Qts,
-		}
-
+		cfg.UpdatesState = config.TelegramUpdatesState{Pts: state.Pts, Date: state.Date, Qts: state.Qts}
 		if err := cfg.Save(configPath); err != nil {
-			log.Fatalf("Failed to save config: %v", err)
+			log.Fatalf("Failed to save initial state: %v", err)
 		}
-
-		log.Println("Initialized successfully. Waiting for new messages on next run.")
-
-		text := fmt.Sprintf("Чат %d успешно инициализирован", cfg.ChatID)
-		if _, err := sender.To(peer).StyledText(ctx, html.String(nil, text)); err != nil {
-			log.Printf("Failed to send notification: %v", err)
-		}
-
+		_, _ = sender.To(peer).StyledText(ctx, html.String(nil, fmt.Sprintf("Chat %d initialized successfully.", cfg.ChatID)))
+		log.Println("Initialized successfully. New files will be processed on the next sync.")
 		return
 	}
 
-	diff, err := api.UpdatesGetDifference(ctx, &tg.UpdatesGetDifferenceRequest{
-		Pts:  cfg.UpdatesState.Pts,
-		Date: cfg.UpdatesState.Date,
-		Qts:  cfg.UpdatesState.Qts,
-	})
-	if err != nil {
-		log.Fatalf("Failed to get updates difference: %v", err)
-	}
+	dl := downloader.NewDownloader()
+	for {
+		diff, err := api.UpdatesGetDifference(ctx, &tg.UpdatesGetDifferenceRequest{Pts: cfg.UpdatesState.Pts, Date: cfg.UpdatesState.Date, Qts: cfg.UpdatesState.Qts})
+		if err != nil {
+			log.Fatalf("Failed to get Telegram updates: %v", err)
+		}
 
-	var msgs []tg.MessageClass
-	var newPts int
-
-	switch d := diff.(type) {
-	case *tg.UpdatesDifferenceEmpty:
-		log.Println("No new messages.")
-	case *tg.UpdatesDifference:
-		msgs = d.NewMessages
-		newPts = d.State.Pts
-	case *tg.UpdatesDifferenceSlice:
-		msgs = d.NewMessages
-		newPts = d.IntermediateState.Pts
-	case *tg.UpdatesDifferenceTooLong:
-		log.Println("Updates gap is too long. Skipping missed messages to catch up.")
-		newPts = d.Pts
-	default:
-		log.Printf("Unexpected updates difference type: %T", diff)
-	}
-
-	if len(msgs) > 0 {
-		dl := downloader.NewDownloader()
-		processMessages(ctx, api, sender, dl, msgs, peer, cfg)
-	}
-
-	if newPts > cfg.UpdatesState.Pts {
-		cfg.UpdatesState.Pts = newPts
-		cfg.UpdatesState.Date = int(time.Now().Unix())
+		done := true
+		switch d := diff.(type) {
+		case *tg.UpdatesDifferenceEmpty:
+			log.Println("No new messages.")
+			cfg.UpdatesState.Date = d.Date
+		case *tg.UpdatesDifference:
+			processMessages(ctx, api, sender, dl, d.NewMessages, peer, cfg)
+			cfg.UpdatesState = config.TelegramUpdatesState{Pts: d.State.Pts, Date: d.State.Date, Qts: d.State.Qts}
+		case *tg.UpdatesDifferenceSlice:
+			processMessages(ctx, api, sender, dl, d.NewMessages, peer, cfg)
+			cfg.UpdatesState = config.TelegramUpdatesState{Pts: d.IntermediateState.Pts, Date: d.IntermediateState.Date, Qts: d.IntermediateState.Qts}
+			done = false
+		case *tg.UpdatesDifferenceTooLong:
+			log.Printf("Telegram update gap is too long; advancing state to PTS %d", d.Pts)
+			cfg.UpdatesState.Pts = d.Pts
+		default:
+			log.Printf("Unexpected Telegram update type: %T", diff)
+		}
 		if err := cfg.Save(configPath); err != nil {
-			log.Fatalf("Failed to save config: %v\n", err)
+			log.Fatalf("Failed to save Telegram state: %v", err)
+		}
+		if done {
+			break
 		}
 	}
-
 	log.Println("Sync completed successfully.")
 }
