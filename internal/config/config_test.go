@@ -80,3 +80,15 @@ func TestValidateProxy(t *testing.T) {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 }
+
+func TestValidateRejectsDownloadOutsideKindleRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("KINDLE_ROOT", root)
+	cfg := DefaultConfig()
+	cfg.BotToken = "token"
+	cfg.ChatID = 1
+	cfg.DownloadPath = filepath.Join(filepath.Dir(root), "outside")
+	if err := cfg.ValidateForSync(); err == nil {
+		t.Fatal("download path outside Kindle root should fail validation")
+	}
+}
