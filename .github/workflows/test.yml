@@ -29,7 +29,13 @@ jobs:
         run: |
           go mod tidy
           if ! git diff --exit-code -- go.mod go.sum; then
-            echo "go.mod/go.sum are not tidy. Diff above must be committed."
+            echo "go.mod/go.sum are not tidy. Generated files follow."
+            echo "---BEGIN GO.MOD---"
+            cat go.mod
+            echo "---END GO.MOD---"
+            echo "---BEGIN GO.SUM---"
+            cat go.sum
+            echo "---END GO.SUM---"
             exit 1
           fi
       - name: Vet
