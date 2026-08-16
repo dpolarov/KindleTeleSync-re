@@ -1,1 +1,32 @@
-{"bot_token":"YOUR_TOKEN","chat_id":0,"allowed_extensions":[".epub",".mobi",".pdf",".zip",".fb2"],"download_path":"/mnt/us/books","last_update_id":0}
+{
+  "bot_token": "",
+  "chat_id": 0,
+  "allowed_extensions": [
+    ".epub",
+    ".mobi",
+    ".pdf",
+    ".zip",
+    ".fb2"
+  ],
+  "root_path": "/mnt/us",
+  "download_path": "/mnt/us/books",
+  "proxy": {
+    "enabled": false,
+    "type": "socks5",
+    "address": "",
+    "username": "",
+    "password": "",
+    "mtproto_secret": ""
+  },
+  "updates_state": {
+    "pts": 0,
+    "date": 0,
+    "qts": 0
+  },
+  "max_file_bytes": 104857600,
+  "max_files_per_sync": 20,
+  "max_total_bytes": 262144000,
+  "sync_timeout_seconds": 600,
+  "web_timeout_seconds": 180,
+  "send_notifications": true
+}
