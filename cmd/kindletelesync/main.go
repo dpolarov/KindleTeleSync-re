@@ -52,7 +52,8 @@ func main() {
 	case "diagnostics", "doctor":
 		result = runDiagnostics()
 	case "update":
-		result = withLock("update", func() Result { return runUpdate() })
+		includePrerelease := hasFlag(args, "--prerelease")
+		result = withLock("update", func() Result { return runUpdate(includePrerelease) })
 	case "web":
 		kindleUI := hasFlag(args, "--kindle-ui")
 		result = withLock("web", func() Result { return runWebServer(kindleUI) })
@@ -187,14 +188,14 @@ func printHelp() {
 	text := `KindleTeleSync
 
 Usage:
-  kindletelesync sync [--json] [--kual]         Download new Telegram files
-  kindletelesync test [--json] [--kual]         Test Telegram login and chat delivery
-  kindletelesync diagnostics [--json] [--kual]  Check config, storage, clock and network
-  kindletelesync update [--json] [--kual]       Verify and install the latest release
-  kindletelesync web [--kindle-ui]              Start protected web settings
-  kindletelesync web-url                         Print the protected settings URL
-  kindletelesync web-stop [--json]               Stop the settings server
-  kindletelesync version [--json] [--kual]      Show version and detected ARM target
+  kindletelesync sync [--json] [--kual]                 Download new Telegram files
+  kindletelesync test [--json] [--kual]                 Test Telegram login and chat delivery
+  kindletelesync diagnostics [--json] [--kual]          Check config, storage, clock and network
+  kindletelesync update [--prerelease] [--json] [--kual] Verify and install the latest release
+  kindletelesync web [--kindle-ui]                      Start protected web settings
+  kindletelesync web-url                                 Print the protected settings URL
+  kindletelesync web-stop [--json]                      Stop the settings server
+  kindletelesync version [--json] [--kual]              Show version and detected ARM target
 `
 	fmt.Print(strings.TrimSpace(text) + "\n")
 }
