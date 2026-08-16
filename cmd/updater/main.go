@@ -12,142 +12,173 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/dpolarov/KindleTeleSync-re/internal/config"
 )
 
-var RepoPath = "antikuz/KindleTeleSync-re"
+var RepoPath = "dpolarov/KindleTeleSync-re"
 var GoArmVersion = "unknown"
 
-type GithubRelease struct {
+type githubRelease struct {
 	TagName string        `json:"tag_name"`
-	Assets  []GithubAsset `json:"assets"`
+	Assets  []githubAsset `json:"assets"`
 }
 
-type GithubAsset struct {
+type githubAsset struct {
 	Name               string `json:"name"`
-	BrowserDownloadUrl string `json:"browser_download_url"`
+	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
 func init() {
-	log.SetFlags(0)
-	log.SetPrefix(fmt.Sprintf("[%s] ", time.Now().Format("2006-01-02 15:04:05")))
+	log.SetFlags(log.Ldate | log.Ltime)
 }
 
 func safeJoin(baseDir, name string) (string, error) {
 	target := filepath.Join(baseDir, name)
 	rel, err := filepath.Rel(baseDir, target)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("unsafe path in archive: %q", name)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("unsafe archive path %q", name)
 	}
 	return target, nil
 }
 
-func main() {
-	rootPath := "/mnt/us"
-	if p := os.Getenv("KINDLE_ROOT"); p != "" {
-		rootPath = p
+func copyFileAtomic(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
 	}
+	defer in.Close()
 
-	workingDirPath := filepath.Join(rootPath, "extensions/KindleTeleSync")
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	tmp := dst + ".new"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmp)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return closeErr
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
 
+func main() {
+	rootPath := config.KindleRoot()
+	workingDirPath := config.AppDir()
 	versionFile := filepath.Join(workingDirPath, "version.txt")
 	currentVerBytes, _ := os.ReadFile(versionFile)
-	currentVer := strings.TrimSpace(string(currentVerBytes))
+	currentVer := strings.TrimPrefix(strings.TrimSpace(string(currentVerBytes)), "v")
 
-	resp, err := http.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", RepoPath))
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", RepoPath))
 	if err != nil {
-		log.Fatalf("Failed to fetch updates: %v", err)
+		log.Fatalf("Failed to check for updates: %v", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("GitHub API returned status %d", resp.StatusCode)
+		log.Fatalf("GitHub API returned %s", resp.Status)
 	}
 
-	var release GithubRelease
+	var release githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		log.Fatalf("Failed to parse response: %v", err)
+		log.Fatalf("Failed to parse GitHub response: %v", err)
 	}
-
-	latestVer := strings.TrimPrefix(release.TagName, "v")
-	if currentVer != "" && currentVer == latestVer {
-		log.Printf("Already up to date (%s). Exiting.", currentVer)
-		os.Exit(0)
+	latestVer := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
+	if latestVer == "" {
+		log.Fatal("Latest release does not have a version tag")
 	}
-
-	log.Printf("New version found: %s. Downloading...", latestVer)
+	if currentVer == latestVer {
+		log.Printf("Already up to date (%s).", currentVer)
+		return
+	}
 
 	targetArch := "arm" + GoArmVersion
-
-	var assetUrl string
+	var assetURL string
 	for _, asset := range release.Assets {
 		if strings.Contains(asset.Name, targetArch) && strings.HasSuffix(asset.Name, ".tar.gz") {
-			assetUrl = asset.BrowserDownloadUrl
+			assetURL = asset.BrowserDownloadURL
 			break
 		}
 	}
-
-	if assetUrl == "" {
-		log.Fatalf("No matching asset found for architecture %s", targetArch)
+	if assetURL == "" {
+		log.Fatalf("No release archive found for %s", targetArch)
 	}
 
-	dlResp, err := http.Get(assetUrl)
+	log.Printf("Updating %s -> %s", currentVer, latestVer)
+	dlResp, err := client.Get(assetURL)
 	if err != nil {
-		log.Fatalf("Failed to download asset: %v", err)
+		log.Fatalf("Failed to download release archive: %v", err)
 	}
 	defer dlResp.Body.Close()
-
 	if dlResp.StatusCode != http.StatusOK {
-		log.Fatalf("Asset download returned status %d", dlResp.StatusCode)
+		log.Fatalf("Release download returned %s", dlResp.Status)
 	}
 
 	gzr, err := gzip.NewReader(dlResp.Body)
 	if err != nil {
-		log.Fatalf("Failed to open gzip stream: %v", err)
+		log.Fatalf("Failed to open release archive: %v", err)
 	}
 	defer gzr.Close()
 
-	tr := tar.NewReader(gzr)
-	tmpUpdateDir := "/tmp/update_kindle_sync"
-
+	tmpUpdateDir := filepath.Join(os.TempDir(), "kindletelesync-update")
 	if err := os.RemoveAll(tmpUpdateDir); err != nil {
-		log.Fatalf("Failed to remove temp dir: %v", err)
+		log.Fatalf("Failed to clear update directory: %v", err)
 	}
 	if err := os.MkdirAll(tmpUpdateDir, 0755); err != nil {
-		log.Fatalf("Failed to create temp dir: %v", err)
+		log.Fatalf("Failed to create update directory: %v", err)
 	}
+	defer os.RemoveAll(tmpUpdateDir)
 
+	tr := tar.NewReader(gzr)
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			log.Fatalf("Tar read error: %v", err)
+			log.Fatalf("Archive read error: %v", err)
 		}
-
 		target, err := safeJoin(tmpUpdateDir, header.Name)
 		if err != nil {
-			log.Fatalf("Skipping unsafe tar entry: %v", err)
+			log.Fatal(err)
 		}
-
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0755); err != nil {
-				log.Fatalf("Failed to create directory %s: %v", target, err)
+				log.Fatalf("Failed to create %s: %v", target, err)
 			}
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				log.Fatalf("Failed to create parent dir for %s: %v", target, err)
+				log.Fatalf("Failed to create parent directory: %v", err)
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			mode := os.FileMode(header.Mode) & 0777
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
-				log.Fatalf("Failed to create file %s: %v", target, err)
+				log.Fatalf("Failed to create %s: %v", target, err)
 			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				log.Fatalf("Failed to extract %s: %v", target, err)
+			_, copyErr := io.Copy(f, tr)
+			closeErr := f.Close()
+			if copyErr != nil || closeErr != nil {
+				log.Fatalf("Failed to extract %s: %v %v", target, copyErr, closeErr)
 			}
-			f.Close()
+		default:
+			log.Printf("Skipping unsupported archive entry %s", header.Name)
 		}
 	}
 
@@ -158,46 +189,26 @@ func main() {
 		if srcPath == tmpUpdateDir {
 			return nil
 		}
-
 		rel, err := filepath.Rel(tmpUpdateDir, srcPath)
 		if err != nil {
 			return err
 		}
-
+		dst, err := safeJoin(rootPath, rel)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return os.MkdirAll(dst, info.Mode().Perm())
+		}
 		if filepath.Base(rel) == "config.json" {
-			dstConfigPath := filepath.Join(rootPath, rel)
-			if _, err := os.Stat(dstConfigPath); err == nil {
-				log.Printf("Skipping config.json (user config exists): %s", rel)
+			if _, err := os.Stat(dst); err == nil {
+				log.Printf("Keeping existing user configuration: %s", rel)
 				return nil
 			}
 		}
-
-		dst := filepath.Join(rootPath, rel)
-
-		if info.IsDir() {
-			return os.MkdirAll(dst, info.Mode())
+		if err := copyFileAtomic(srcPath, dst, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("update %s: %w", rel, err)
 		}
-
-		srcFile, err := os.Open(srcPath)
-		if err != nil {
-			return fmt.Errorf("open source %s: %w", srcPath, err)
-		}
-		defer srcFile.Close()
-
-		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-			return fmt.Errorf("mkdir for %s: %w", dst, err)
-		}
-
-		dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-		if err != nil {
-			return fmt.Errorf("open dest %s: %w", dst, err)
-		}
-		defer dstFile.Close()
-
-		if _, err := io.Copy(dstFile, srcFile); err != nil {
-			return fmt.Errorf("copy %s: %w", rel, err)
-		}
-
 		log.Printf("Updated %s", rel)
 		return nil
 	})
@@ -205,12 +216,8 @@ func main() {
 		log.Fatalf("Failed to apply update: %v", err)
 	}
 
-	if err := os.WriteFile(versionFile, []byte(latestVer), 0644); err != nil {
+	if err := os.WriteFile(versionFile, []byte(latestVer+"\n"), 0644); err != nil {
 		log.Fatalf("Failed to write version file: %v", err)
 	}
-	if err := os.RemoveAll(tmpUpdateDir); err != nil {
-		log.Printf("Warning: failed to remove temp dir: %v", err)
-	}
-
-	log.Println("Update completed successfully.")
+	log.Println("Update completed successfully. Restart KOReader if the plugin files changed.")
 }
