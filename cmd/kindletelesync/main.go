@@ -41,6 +41,7 @@ func main() {
 	command := os.Args[1]
 	args := os.Args[2:]
 	jsonOutput := hasFlag(args, "--json")
+	kualOutput := hasFlag(args, "--kual")
 	var result Result
 
 	switch command {
@@ -77,6 +78,9 @@ func main() {
 	}
 
 	emitResult(result, jsonOutput)
+	if kualOutput {
+		renderKUALResult(result)
+	}
 	if !result.OK {
 		os.Exit(1)
 	}
@@ -183,14 +187,14 @@ func printHelp() {
 	text := `KindleTeleSync
 
 Usage:
-  kindletelesync sync [--json]         Download new Telegram files
-  kindletelesync test [--json]         Test Telegram login and chat delivery
-  kindletelesync diagnostics [--json]  Check config, storage, clock and network
-  kindletelesync update [--json]       Verify and install the latest release
-  kindletelesync web [--kindle-ui]     Start protected web settings
-  kindletelesync web-url               Print the protected settings URL
-  kindletelesync web-stop [--json]     Stop the settings server
-  kindletelesync version [--json]      Show version and detected ARM target
+  kindletelesync sync [--json] [--kual]         Download new Telegram files
+  kindletelesync test [--json] [--kual]         Test Telegram login and chat delivery
+  kindletelesync diagnostics [--json] [--kual]  Check config, storage, clock and network
+  kindletelesync update [--json] [--kual]       Verify and install the latest release
+  kindletelesync web [--kindle-ui]              Start protected web settings
+  kindletelesync web-url                         Print the protected settings URL
+  kindletelesync web-stop [--json]               Stop the settings server
+  kindletelesync version [--json] [--kual]      Show version and detected ARM target
 `
 	fmt.Print(strings.TrimSpace(text) + "\n")
 }
