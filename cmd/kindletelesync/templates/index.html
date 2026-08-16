@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>KindleTeleSync settings</title>
+  <style>
+    body{font-family:system-ui,Arial,sans-serif;background:#f3f3f3;margin:0;padding:24px;color:#222}
+    .container{max-width:640px;margin:auto;background:#fff;padding:24px;border-radius:12px;box-shadow:0 3px 14px #0001}
+    h1{font-size:24px;margin-top:0}.section{border-top:1px solid #ddd;margin-top:22px;padding-top:18px}
+    label{display:block;margin:12px 0 5px;font-weight:600}input[type=text],input[type=password],input[type=number],select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #bbb;border-radius:7px;font-size:16px}
+    .check{display:flex;gap:9px;align-items:center;font-weight:500}.check input{width:auto}.hint{font-size:13px;color:#666;margin-top:4px}.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    button,input[type=submit]{padding:11px 18px;border:0;border-radius:7px;background:#222;color:#fff;font-size:16px;cursor:pointer}.danger{background:#a21d1d}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+    @media(max-width:600px){.row{grid-template-columns:1fr}.container{padding:18px}body{padding:10px}}
+  </style>
+  <script>
+    function toggleProxy(){const e=document.getElementById('proxy_enabled').checked;document.getElementById('proxy_details').style.display=e?'block':'none';toggleProxyType()}
+    function toggleProxyType(){const t=document.getElementById('proxy_type').value;document.getElementById('mtproto_fields').style.display=t==='mtproto'?'block':'none';document.getElementById('auth_fields').style.display=t==='mtproto'?'none':'block'}
+    window.addEventListener('load',toggleProxy)
+  </script>
+</head>
+<body>
+<div class="container">
+  <h1>KindleTeleSync settings</h1>
+  <p>Settings are available only through this temporary, token-protected URL. Secret fields are never pre-filled.</p>
+  <form action="/save?token={{.Token}}" method="post">
+    <input type="hidden" name="token" value="{{.Token}}">
+
+    <label>Bot token</label>
+    <input type="password" name="bot_token" autocomplete="new-password" placeholder="Leave blank to keep the current token">
+    <div class="hint">Create a Telegram bot with @BotFather and paste its token here.</div>
+
+    <label>Chat ID</label>
+    <input type="text" name="chat_id" value="{{.Config.ChatID}}" required>
+
+    <label>Allowed extensions</label>
+    <input type="text" name="allowed_extensions" value="{{.AllowedExtensions}}" placeholder=".epub, .mobi, .pdf, .fb2">
+
+    <label>Download directory</label>
+    <input type="text" name="download_path" value="{{.Config.DownloadPath}}" required>
+
+    <div class="section">
+      <h2>Safety limits</h2>
+      <div class="row">
+        <div><label>Maximum file size (MiB)</label><input type="number" min="1" name="max_file_mb" value="{{.MaxFileMB}}"></div>
+        <div><label>Maximum files per sync</label><input type="number" min="1" name="max_files_per_sync" value="{{.Config.MaxFilesPerSync}}"></div>
+      </div>
+      <label>Maximum total download per sync (MiB)</label>
+      <input type="number" min="1" name="max_total_mb" value="{{.MaxTotalMB}}">
+      <div class="row">
+        <div><label>Sync timeout (seconds)</label><input type="number" min="30" name="sync_timeout_seconds" value="{{.Config.SyncTimeout}}"></div>
+        <div><label>Web settings timeout (seconds)</label><input type="number" min="30" name="web_timeout_seconds" value="{{.Config.WebTimeout}}"></div>
+      </div>
+      <label class="check"><input type="checkbox" name="send_notifications" {{if .Config.SendNotifications}}checked{{end}}> Send Telegram summaries and initialization messages</label>
+    </div>
+
+    <div class="section">
+      <h2>Proxy</h2>
+      <label class="check"><input type="checkbox" id="proxy_enabled" name="proxy_enabled" {{if .Config.Proxy.Enabled}}checked{{end}} onchange="toggleProxy()"> Use proxy</label>
+      <div id="proxy_details">
+        <label>Proxy type</label>
+        <select id="proxy_type" name="proxy_type" onchange="toggleProxyType()">
+          <option value="socks5" {{if eq .Config.Proxy.Type "socks5"}}selected{{end}}>SOCKS5</option>
+          <option value="http" {{if eq .Config.Proxy.Type "http"}}selected{{end}}>HTTP CONNECT</option>
+          <option value="mtproto" {{if eq .Config.Proxy.Type "mtproto"}}selected{{end}}>MTProto</option>
+        </select>
+        <label>Address (host:port)</label>
+        <input type="text" name="proxy_address" value="{{.Config.Proxy.Address}}" placeholder="127.0.0.1:1080">
+        <div id="auth_fields">
+          <label>Username</label><input type="text" name="proxy_username" value="{{.Config.Proxy.Username}}">
+          <label>Password</label><input type="password" name="proxy_password" autocomplete="new-password" placeholder="Leave blank to keep the current password">
+        </div>
+        <div id="mtproto_fields">
+          <label>MTProto secret</label><input type="password" name="proxy_mtproto_secret" autocomplete="new-password" placeholder="Leave blank to keep the current secret">
+        </div>
+      </div>
+    </div>
+
+    <div class="actions"><input type="submit" value="Save settings"></div>
+  </form>
+
+  <form action="/stop?token={{.Token}}" method="post" class="actions">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <input class="danger" type="submit" value="Stop settings server">
+  </form>
+</div>
+</body>
+</html>
