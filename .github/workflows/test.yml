@@ -18,7 +18,13 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Format check
-        run: test -z "$(gofmt -l cmd internal)"
+        run: |
+          FILES="$(gofmt -l cmd internal)"
+          if [ -n "$FILES" ]; then
+            echo "The following Go files need gofmt:"
+            echo "$FILES"
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Test
