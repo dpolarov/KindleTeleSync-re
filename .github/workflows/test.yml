@@ -28,15 +28,16 @@ jobs:
             echo "$FILES"
             exit 1
           fi
-      - name: Prepare module graph
+      - name: Module tidy check
         run: |
           go mod tidy
-          echo "GO_MOD_BASE64=$(base64 -w0 go.mod)"
-          echo "GO_SUM_BASE64=$(base64 -w0 go.sum)"
+          git diff --exit-code -- go.mod go.sum
       - name: Vet
         run: go vet ./...
       - name: Test
         run: go test ./...
+      - name: Race test
+        run: go test -race ./cmd/kindletelesync ./internal/config
       - name: Cross-build ARMv6
         env:
           GOOS: linux
