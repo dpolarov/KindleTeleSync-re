@@ -16,11 +16,14 @@ import (
 	"time"
 
 	"github.com/dpolarov/KindleTeleSync-re/internal/config"
+	"golang.org/x/mod/semver"
 )
 
 type githubRelease struct {
-	TagName string        `json:"tag_name"`
-	Assets  []githubAsset `json:"assets"`
+	TagName    string        `json:"tag_name"`
+	Prerelease bool          `json:"prerelease"`
+	Draft      bool          `json:"draft"`
+	Assets     []githubAsset `json:"assets"`
 }
 
 type githubAsset struct {
@@ -28,10 +31,10 @@ type githubAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-func runUpdate() Result {
+func runUpdate(includePrerelease bool) Result {
 	currentVer := installedVersion()
 	client := &http.Client{Timeout: 5 * time.Minute}
-	release, err := fetchLatestRelease(client)
+	release, err := fetchLatestRelease(client, includePrerelease)
 	if err != nil {
 		return failure("update", "Failed to check GitHub releases", err)
 	}
@@ -39,8 +42,17 @@ func runUpdate() Result {
 	if latestVer == "" {
 		return failure("update", "Latest release has no version tag", fmt.Errorf("empty tag_name"))
 	}
-	if currentVer == latestVer {
-		return Result{OK: true, Action: "update", Message: fmt.Sprintf("Already up to date (%s).", currentVer), Details: map[string]any{"current": currentVer, "latest": latestVer, "goarm": effectiveGOARM()}}
+	channel := "stable"
+	if includePrerelease {
+		channel = "prerelease"
+	}
+	if currentVer != "" {
+		switch compareVersions(currentVer, latestVer) {
+		case 0:
+			return Result{OK: true, Action: "update", Message: fmt.Sprintf("Already up to date (%s).", currentVer), Details: map[string]any{"current": currentVer, "latest": latestVer, "goarm": effectiveGOARM(), "channel": channel}}
+		case 1:
+			return Result{OK: true, Action: "update", Message: fmt.Sprintf("Installed version %s is newer than the latest %s release (%s); refusing to downgrade.", currentVer, channel, latestVer), Details: map[string]any{"current": currentVer, "latest": latestVer, "goarm": effectiveGOARM(), "channel": channel}}
+		}
 	}
 
 	arch := effectiveGOARM()
@@ -94,7 +106,7 @@ func runUpdate() Result {
 		Action:  "update",
 		Message: fmt.Sprintf("Updated KindleTeleSync from %s to %s. Restart KOReader to reload the plugin.", valueOrUnknown(currentVer), latestVer),
 		Skipped: cleanupWarnings,
-		Details: map[string]any{"current": currentVer, "latest": latestVer, "goarm": arch, "asset": archiveName, "sha256": actual},
+		Details: map[string]any{"current": currentVer, "latest": latestVer, "goarm": arch, "asset": archiveName, "sha256": actual, "channel": channel},
 	}
 }
 
@@ -111,8 +123,45 @@ func installedVersion() string {
 	return ""
 }
 
-func fetchLatestRelease(client *http.Client) (*githubRelease, error) {
-	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", RepoPath))
+func compareVersions(current, latest string) int {
+	currentSemver := "v" + strings.TrimPrefix(strings.TrimSpace(current), "v")
+	latestSemver := "v" + strings.TrimPrefix(strings.TrimSpace(latest), "v")
+	if semver.IsValid(currentSemver) && semver.IsValid(latestSemver) {
+		return semver.Compare(currentSemver, latestSemver)
+	}
+	if current == latest {
+		return 0
+	}
+	return -1
+}
+
+func fetchLatestRelease(client *http.Client, includePrerelease bool) (*githubRelease, error) {
+	if !includePrerelease {
+		return fetchReleaseEndpoint(client, fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", RepoPath))
+	}
+
+	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=20", RepoPath))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %s", resp.Status)
+	}
+	var releases []githubRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&releases); err != nil {
+		return nil, err
+	}
+	for i := range releases {
+		if !releases[i].Draft {
+			return &releases[i], nil
+		}
+	}
+	return nil, fmt.Errorf("GitHub returned no published releases")
+}
+
+func fetchReleaseEndpoint(client *http.Client, endpoint string) (*githubRelease, error) {
+	resp, err := client.Get(endpoint)
 	if err != nil {
 		return nil, err
 	}
