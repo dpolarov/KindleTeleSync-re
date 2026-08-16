@@ -114,9 +114,7 @@ func LoadOrCreate(path string) (*Config, error) {
 }
 
 func (c *Config) Normalize() {
-	if c.RootPath == "" {
-		c.RootPath = KindleRoot()
-	}
+	c.RootPath = KindleRoot()
 	if c.DownloadPath == "" {
 		c.DownloadPath = filepath.Join(c.RootPath, "books")
 	}
@@ -177,6 +175,15 @@ func (c *Config) ValidateForSync() error {
 	if strings.TrimSpace(c.DownloadPath) == "" {
 		return errors.New("download path is empty")
 	}
+	if !filepath.IsAbs(c.DownloadPath) {
+		return errors.New("download path must be absolute")
+	}
+	downloadPath := filepath.Clean(c.DownloadPath)
+	rel, err := filepath.Rel(c.RootPath, downloadPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("download path %q is outside Kindle storage %q", downloadPath, c.RootPath)
+	}
+	c.DownloadPath = downloadPath
 	if c.Proxy.Enabled {
 		if strings.TrimSpace(c.Proxy.Address) == "" {
 			return errors.New("proxy address is empty")
