@@ -18,6 +18,7 @@ import (
 	"github.com/dpolarov/KindleTeleSync-re/internal/config"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/dcs"
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"golang.org/x/net/proxy"
@@ -33,9 +34,7 @@ type bufferedConn struct {
 	reader *bufio.Reader
 }
 
-func (c *bufferedConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
 type syncStats struct {
 	downloaded []string
@@ -55,13 +54,11 @@ func runSync() Result {
 	if err := ensureWritableDirectory(cfg.DownloadPath); err != nil {
 		return failure("sync", "Download directory is not writable", err)
 	}
-
 	if server, err := syncClock(); err != nil {
 		log.Printf("Clock synchronization warning: %v", err)
 	} else {
 		log.Printf("Clock synchronized via %s", server)
 	}
-
 	resolver, err := setupResolver(cfg)
 	if err != nil {
 		return failure("sync", "Proxy configuration error", err)
@@ -69,12 +66,10 @@ func runSync() Result {
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration(cfg.SyncTimeout, config.DefaultSyncTimeoutSeconds))
 	defer cancel()
-
 	client := telegram.NewClient(appID, appHash, telegram.Options{
 		Resolver:    resolver,
 		DialTimeout: 90 * time.Second,
 		NoUpdates:   true,
-		AllowCDN:    true,
 	})
 	stats := &syncStats{}
 	initialized := false
@@ -85,6 +80,7 @@ func runSync() Result {
 		}
 		api := client.API()
 		sender := message.NewSender(api)
+		dl := downloader.NewDownloader()
 		peer := &tg.InputPeerUser{UserID: cfg.ChatID}
 
 		if cfg.UpdatesState.Pts == 0 {
@@ -105,23 +101,20 @@ func runSync() Result {
 
 		for {
 			diff, err := api.UpdatesGetDifference(ctx, &tg.UpdatesGetDifferenceRequest{
-				Pts:  cfg.UpdatesState.Pts,
-				Date: cfg.UpdatesState.Date,
-				Qts:  cfg.UpdatesState.Qts,
+				Pts: cfg.UpdatesState.Pts, Date: cfg.UpdatesState.Date, Qts: cfg.UpdatesState.Qts,
 			})
 			if err != nil {
 				return fmt.Errorf("get Telegram updates: %w", err)
 			}
-
 			done := true
 			switch d := diff.(type) {
 			case *tg.UpdatesDifferenceEmpty:
 				cfg.UpdatesState.Date = d.Date
 			case *tg.UpdatesDifference:
-				processMessages(ctx, client, d.NewMessages, peer, cfg, stats)
+				processMessages(ctx, api, dl, d.NewMessages, peer, cfg, stats)
 				cfg.UpdatesState = config.TelegramUpdatesState{Pts: d.State.Pts, Date: d.State.Date, Qts: d.State.Qts}
 			case *tg.UpdatesDifferenceSlice:
-				processMessages(ctx, client, d.NewMessages, peer, cfg, stats)
+				processMessages(ctx, api, dl, d.NewMessages, peer, cfg, stats)
 				cfg.UpdatesState = config.TelegramUpdatesState{Pts: d.IntermediateState.Pts, Date: d.IntermediateState.Date, Qts: d.IntermediateState.Qts}
 				done = false
 			case *tg.UpdatesDifferenceTooLong:
@@ -139,30 +132,18 @@ func runSync() Result {
 		}
 
 		if cfg.SendNotifications && (len(stats.downloaded) > 0 || len(stats.errors) > 0) {
-			text := notificationText(stats)
-			if _, err := sender.To(peer).Text(ctx, text); err != nil {
+			if _, err := sender.To(peer).Text(ctx, notificationText(stats)); err != nil {
 				log.Printf("Failed to send Telegram summary: %v", err)
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return Result{
-			OK:         false,
-			Action:     "sync",
-			Message:    "Synchronization failed: " + err.Error(),
-			Downloaded: stats.downloaded,
-			Skipped:    stats.skipped,
-			Errors:     append(stats.errors, err.Error()),
-			Details: map[string]any{
-				"bytes_downloaded": stats.totalBytes,
-			},
-		}
+		return Result{OK: false, Action: "sync", Message: "Synchronization failed: " + err.Error(), Downloaded: stats.downloaded, Skipped: stats.skipped, Errors: append(stats.errors, err.Error()), Details: map[string]any{"bytes_downloaded": stats.totalBytes}}
 	}
 	if initialized {
 		return Result{OK: true, Action: "sync", Message: "KindleTeleSync initialized. Run sync again after sending a new file to the bot."}
 	}
-
 	messageText := "Sync completed. No new matching files."
 	if len(stats.downloaded) > 0 {
 		messageText = fmt.Sprintf("Sync completed: downloaded %d file(s), %s.", len(stats.downloaded), humanBytes(stats.totalBytes))
@@ -170,17 +151,7 @@ func runSync() Result {
 	if len(stats.errors) > 0 {
 		messageText = fmt.Sprintf("Sync completed with %d error(s).", len(stats.errors))
 	}
-	return Result{
-		OK:         len(stats.errors) == 0,
-		Action:     "sync",
-		Message:    messageText,
-		Downloaded: stats.downloaded,
-		Skipped:    stats.skipped,
-		Errors:     stats.errors,
-		Details: map[string]any{
-			"bytes_downloaded": stats.totalBytes,
-		},
-	}
+	return Result{OK: len(stats.errors) == 0, Action: "sync", Message: messageText, Downloaded: stats.downloaded, Skipped: stats.skipped, Errors: stats.errors, Details: map[string]any{"bytes_downloaded": stats.totalBytes}}
 }
 
 func runTelegramTest() Result {
@@ -200,7 +171,6 @@ func runTelegramTest() Result {
 	} else {
 		log.Printf("Clock synchronized via %s before Telegram test", server)
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
 	client := telegram.NewClient(appID, appHash, telegram.Options{Resolver: resolver, DialTimeout: 90 * time.Second, NoUpdates: true})
@@ -227,7 +197,6 @@ func setupResolver(cfg *config.Config) (dcs.Resolver, error) {
 	if !cfg.Proxy.Enabled {
 		return dcs.DefaultResolver(), nil
 	}
-
 	switch cfg.Proxy.Type {
 	case "mtproto":
 		secret, err := hex.DecodeString(cfg.Proxy.MTProtoSecret)
@@ -275,11 +244,9 @@ func httpProxyDialer(proxyAddr, user, pass string) func(context.Context, string,
 		}()
 		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 		defer conn.SetDeadline(time.Time{})
-
 		req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: addr}, Host: addr, Header: make(http.Header)}
 		if user != "" || pass != "" {
-			auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-			req.Header.Set("Proxy-Authorization", "Basic "+auth)
+			req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
 		}
 		if err := req.Write(conn); err != nil {
 			return nil, err
@@ -300,7 +267,7 @@ func httpProxyDialer(proxyAddr, user, pass string) func(context.Context, string,
 	}
 }
 
-func processMessages(ctx context.Context, client *telegram.Client, messages []tg.MessageClass, peer *tg.InputPeerUser, cfg *config.Config, stats *syncStats) {
+func processMessages(ctx context.Context, api *tg.Client, dl *downloader.Downloader, messages []tg.MessageClass, peer *tg.InputPeerUser, cfg *config.Config, stats *syncStats) {
 	for _, item := range messages {
 		msg, ok := item.(*tg.Message)
 		if !ok || getPeerID(msg.PeerID) != peer.UserID {
@@ -334,9 +301,8 @@ func processMessages(ctx context.Context, client *telegram.Client, messages []tg
 			appendCapped(&stats.skipped, fmt.Sprintf("%s (would exceed %s total sync limit)", filename, humanBytes(cfg.MaxTotalBytes)))
 			continue
 		}
-
 		outPath := getUniqueFilename(cfg.DownloadPath, filename)
-		if _, err := client.Download(doc.AsInputDocumentFileLocation()).ToPath(ctx, outPath); err != nil {
+		if _, err := dl.Download(api, doc.AsInputDocumentFileLocation()).ToPath(ctx, outPath); err != nil {
 			_ = os.Remove(outPath)
 			log.Printf("Failed to download %s: %v", filename, err)
 			appendCapped(&stats.errors, fmt.Sprintf("%s: %v", filename, err))
@@ -398,8 +364,7 @@ func isAllowedExt(filename string, allowed []string) bool {
 }
 
 func appendCapped(dst *[]string, value string) {
-	const maxItems = 50
-	if len(*dst) < maxItems {
+	if len(*dst) < 50 {
 		*dst = append(*dst, value)
 	}
 }
