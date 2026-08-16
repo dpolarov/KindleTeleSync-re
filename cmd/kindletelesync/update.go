@@ -84,6 +84,7 @@ func runUpdate() Result {
 	if err := applyUpdate(extractDir, config.KindleRoot()); err != nil {
 		return failure("update", "Failed to install update", err)
 	}
+	cleanupWarnings := cleanupLegacyFiles(config.AppDir())
 	if err := os.WriteFile(filepath.Join(config.AppDir(), "version.txt"), []byte(latestVer+"\n"), 0644); err != nil {
 		return failure("update", "Update installed but version file could not be written", err)
 	}
@@ -92,6 +93,7 @@ func runUpdate() Result {
 		OK:      true,
 		Action:  "update",
 		Message: fmt.Sprintf("Updated KindleTeleSync from %s to %s. Restart KOReader to reload the plugin.", valueOrUnknown(currentVer), latestVer),
+		Skipped: cleanupWarnings,
 		Details: map[string]any{"current": currentVer, "latest": latestVer, "goarm": arch, "asset": archiveName, "sha256": actual},
 	}
 }
@@ -332,6 +334,27 @@ func copyFileAtomic(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return nil
+}
+
+func cleanupLegacyFiles(appDir string) []string {
+	legacy := []string{
+		"kindle_sync_d",
+		"updater",
+		"webconfig",
+		"KindleTeleSync.sh",
+		"update.sh",
+		"web.sh",
+		"fbink",
+		"qr.png",
+	}
+	var warnings []string
+	for _, name := range legacy {
+		path := filepath.Join(appDir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			warnings = append(warnings, fmt.Sprintf("Could not remove legacy %s: %v", name, err))
+		}
+	}
+	return warnings
 }
 
 func valueOrUnknown(s string) string {
