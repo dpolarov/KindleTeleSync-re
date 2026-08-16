@@ -1,0 +1,54 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.12'
+          cache: true
+      - name: Format check
+        run: |
+          FILES="$(gofmt -l cmd internal)"
+          if [ -n "$FILES" ]; then
+            echo "The following Go files need gofmt:"
+            echo "$FILES"
+            exit 1
+          fi
+      - name: Module tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Race test
+        run: go test -race ./cmd/kindletelesync ./internal/config
+      - name: Cross-build ARMv6
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 6
+          CGO_ENABLED: 0
+        run: go build -trimpath -o /tmp/kindletelesync-arm6 ./cmd/kindletelesync
+      - name: Cross-build ARMv7
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 7
+          CGO_ENABLED: 0
+        run: go build -trimpath -o /tmp/kindletelesync-arm7 ./cmd/kindletelesync

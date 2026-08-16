@@ -1,25 +1,40 @@
 {
-	"items": [
-		{
-			"name": "KindleTeleSync",
-			"priority": -10,
-			"items": [
-				{
-					"name": "Запустить KindleTeleSync",
-					"priority": 100,
-					"action": "./KindleTeleSync.sh"
-				},
-				{
-					"name": "Запустить вебсервер настройки",
-					"priority": 100,
-					"action": "./web.sh"
-				},
-				{
-					"name": "Проверить обновления",
-					"priority": 100,
-					"action": "./update.sh"
-				}
-			]
-		}
-	]
+  "items": [
+    {
+      "name": "KindleTeleSync",
+      "priority": -10,
+      "items": [
+        {
+          "name": "Sync now",
+          "priority": 100,
+          "action": "./kindletelesync sync --kual"
+        },
+        {
+          "name": "Test Telegram",
+          "priority": 90,
+          "action": "./kindletelesync test --kual"
+        },
+        {
+          "name": "Open web settings",
+          "priority": 80,
+          "action": "./kindletelesync web --kindle-ui"
+        },
+        {
+          "name": "Run diagnostics",
+          "priority": 70,
+          "action": "./kindletelesync diagnostics --kual"
+        },
+        {
+          "name": "Update KindleTeleSync",
+          "priority": 60,
+          "action": "./kindletelesync update --kual"
+        },
+        {
+          "name": "Show version",
+          "priority": 50,
+          "action": "./kindletelesync version --kual"
+        }
+      ]
+    }
+  ]
 }

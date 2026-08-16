@@ -1,120 +1,281 @@
-# KindleTeleSync-re
+# KindleTeleSync
 
-Данный репозиторий представляет собой **полную переработку** функциональности приложения, исходный код которого был безвозвратно утерян, кроме файлов `build/package/...` для работы меню KUAL и koreader.
+KindleTeleSync downloads books and documents from a Telegram bot directly to a jailbroken Amazon Kindle.
 
-**KindleTeleSync** — это инструменты, предназначенные для работы на Amazon Kindle с джейлбрейком. Они позволяют автоматически загружать книги и документы прямо из чата Telegram на устройство.
+This repository is a maintained reconstruction of the original KindleTeleSync project. The original application source was lost; the remaining KUAL/KOReader package was used as the behavioral reference. This fork modernizes the reconstructed implementation around a single Go executable and keeps the user-facing interface in English.
 
-Поскольку Telegram заблокирован в некоторых регионах, KindleTeleSync поддерживает **встроенные протоколы MTProto, SOCKS5 и HTTP-прокси**.
+## Highlights
 
-Запуск синхронизации будет долгим при использовании MTProto, на Kindle PW5 начальный этап согласования криптопротокола занимает ~45 сек. 
-> [!CAUTION]
-> Работа  проверена только на версии Kindle Paperwhite 5 (arm7) совместно с MTProto
+- One Go executable: `kindletelesync`.
+- KUAL and native KOReader integration.
+- Telegram synchronization with persistent update state.
+- MTProto, SOCKS5, and HTTP CONNECT proxy support.
+- Native KOReader settings plus token-protected browser settings.
+- Download safety limits before a Telegram document is fetched.
+- Structured JSON results for UI integrations.
+- Diagnostics and Telegram connection tests.
+- Operation lock to prevent simultaneous sync/update/settings jobs.
+- Built-in log rotation.
+- Self-update from stable releases, with an explicit prerelease channel for RC testing.
+- Semantic version ordering prevents accidental downgrade from an RC to an older stable release.
+- SHA-256 verification before an update archive is installed.
+- ARMv6 and ARMv7 release builds, plus a conservative universal archive.
+- Go 1.23 build baseline retained for compatibility with older Kindle Linux kernels.
 
-## Требования
-- Джейлбрейк
-- KUAL
-- Подключение к интернету
-- Настроенный бот в телеграм
+## Requirements
 
-## Возможности
+- A jailbroken Kindle.
+- KUAL and/or KOReader.
+- Wi-Fi access.
+- A Telegram bot token created with BotFather.
+- The Telegram chat ID used with that bot.
+- Linux kernel 2.6.32 or newer for the Go runtime used by release builds.
 
-* **Поддержка прокси:** обход сетевых ограничений с помощью встроенных прокси MTProto, HTTP или SOCKS5.
-* **Веб-настройки:** удобный веб-интерфейс для настройки токена бота, идентификаторов чатов и прокси.
-* **Умная синхронизация:** запоминает последнее загруженное сообщение. При первом запуске пропускает старую историю чата.
-* **Фильтрация расширений:** загружает только файлы указанных типов (например, `.epub`, `.mobi`, `.pdf`, `.fb2`).
-* **Встроенный апдейтер:** загружает и устанавливает последние бинарные версии для ARM напрямую с GitHub.
-* **Таймаут:** во избежание зависания, выполнение синхронизации прекратится по истечении 180 сек.
+The reconstructed application has primarily been tested on newer ARMv7 Kindles. Device-specific testing is still recommended, especially on older ARMv6 models.
 
-## Настройка и использование
+### Kindle kernel compatibility
 
-1. **Установка на Kindle:**
-   Распакуйте загруженный файл (`KindleTeleSync-armX.tar.gz`) на Kindle, обычно в папку `/mnt/us/`
-2. **Настройка:**
-   Запустите вебсервер настройки из меню KUAL или Koreader, укажите Bot token и Chat ID, если нужно настройте прокси
-3. **Синхронизация книг:**
-   Запустите KindleTeleSync из меню KUAL или Koreader
-4. **Обновление:**
-   Запустите проверку обновлений из меню KUAL или Koreader
+Release binaries are intentionally built with **Go 1.23.12** and `GOTOOLCHAIN=local`. Go 1.23 supports Linux kernels starting at 2.6.32, while newer Go releases raise the Linux baseline and would exclude several otherwise capable older Kindles.
 
-## Архивная документация
-> **Примечание:** Ниже приведён оригинальный README утерянной версии проекта
-<details>
-<summary>Нажмите, чтобы развернуть старый README</summary>
+This means the ARM label alone is not enough to determine compatibility:
 
-```markdown
-# Требования:
-1. Джейлбрейк
-2. KUAL
-3. Подключение к интернету
+- ARMv7 Kindles using Linux 3.x or newer are within the runtime baseline.
+- ARMv6 devices are supported only when their Linux kernel is at least 2.6.32.
+- Very old Kindles using Linux 2.6.31 are **not supported** by these Go binaries even if the CPU can execute an ARMv6 build.
 
-# Настройка:
-1. Распаковать содержимое архива в корень вашего Kindle (/mtn/us/).
-2. Создать своего бота в телеграме:
-## Важно: Для использования необходимо создать своего телеграм бота и получить api token
-### Как получить токен в BotFather:
-***
-	1. Отправьте в чат с BotFather команду /newbot.
-	2. Введите название бота — в этой категории особых ограничений нет.
-	3. Введите юзернейм бота — его техническое имя, которое будет отображаться в адресной строке. К нему уже больше требований: юзернейм должен быть уникальным, написан на латинице и обязательно заканчиваться на bot. Так «Телеграм» защищается от злоумышленников, которые могут выдавать ботов за реальных людей.
-	4. Готово!
-	5. BotFather пришлет токен бота — скопируйте его и вставьте в config.json "bot_token":"ВАШ_ТОКЕН"
-	Храните его в секрете и никому не передавайте!
-***
-3. В KUAL найти KindleTeleSync - запустить, полученный chatid (в самом верху экрана Киндла и в телеграме отобразится ваш чат айди (chat_id)) вписать в файле config.json в секцию chat_id:0 где 0 - заменить на ваш chat_id 
-Настройка завершена.
+Run `kindletelesync diagnostics` on an installed build to see the detected CPU target and kernel release.
 
-Теперь боту можно пересылать сообщения с файлами/файлы , при запуске KindleTeleSync на вашем Kindle будет их скачивать в указанное место в конфиге (по умолчанию в папку books). 
-Так же в конфиге можно указать форматы файлов которые будут разрешены для скачивания, по умолчанию это epub,mobi,pdf,zip,fb2
-Подробные логи пишутся в файл sync.log, краткие информационные сообщения выводятся вверху экрана. 
+## Installation
 
-Настройки можно вбить\поменять с внешнего устройства, запустив соответсвующий пункт меню в KOReader (см. скриншоты)
+1. Open the latest GitHub release.
+2. Download one archive:
+   - `KindleTeleSync-arm7.tar.gz` — optimized for ARMv7 Kindles.
+   - `KindleTeleSync-arm6.tar.gz` — optimized for ARMv6 Kindles whose kernel meets the requirement above.
+   - `KindleTeleSync-universal.tar.gz` — conservative ARMv6-compatible CPU build with runtime ARM detection; it still requires Linux 2.6.32 or newer.
+3. Extract the archive into `/mnt/us` on the Kindle.
+4. Restart KOReader if its plugin was already loaded.
 
-Большие файлы могут долго скачиваться, имейте это в виду!
+The package installs:
 
-Версия 1.2.4
-
-Автор — [XroM](https://4pda.to/forum/index.php?showuser=237553)
-
-За тесты и помощь спасибо [Dark_AssassinUA](https://4pda.to/forum/index.php?showuser=2610359)
-
-ENG:
-# Requirements:
-1. Jailbreak
-2. KUAL
-3. Internet connection
-
-# Customization:
-1. Unzip the KindleTeleSync folder to the extensions folder on your Kindle.
-2. Create your own bot in Telegram:
-## Important: To use it, you need to create your own telegram bot and get an api token.
-### How to get a token in BotFather:
-***
-	1. Send the /newbot team to the chat with BotFather.
-	2. Enter the name of the bot — there are no special restrictions in this category.
-	3. Enter the bot's username— its technical name, which will be displayed in the address bar. There are already more requirements for it: the username must be unique, written in Latin and must end with bot. This is how Telegram protects itself from intruders who can impersonate bots as real people.
-	4. It's done!
-	5. BotFather will send the bot token — copy it and paste it into the "api token section"
-***
-Keep it secret and do not share it with anyone!
-
-3. In KUAL, find KindleTeleSync - run, enter the received chatid (at the very top of the Kindle screen and your chat ID (chat_id) will be displayed in the telegram) in the config.json file in section the chat_id:0 where 0 is replaced by your chat_id 
-The setup is complete.
-
-Now you can send messages with files/files to the bot. When you start KindleTeleSync on your Kindle, it will download them to the specified location in the config (by default, to the books folder). 
-You can also specify the file formats that will be allowed for download in the config. By default, these are epub,mobi,pdf,zip,fb2
-Detailed logs are written to the sync.log file, and brief information messages are displayed at the top of the screen. 
-Large files can take a long time to download, keep this in mind!
-The first public version, there may be errors. 
-Version 1.2.2
-
-Author — [XroM](https://4pda.to/forum/index.php?showuser=237553)
-
-
-Thanks  for the tests and help to [Dark_AssassinUA](https://4pda.to/forum/index.php?showuser=2610359)
-
- <img src="https://github.com/user-attachments/assets/267e4466-4f9d-4bb4-8ca8-a5766d15935b" width="300">
- <img src="https://github.com/user-attachments/assets/865cfec1-f7c8-42ad-bbf5-1b4f5366ae00" width="300">
- <img src="https://github.com/user-attachments/assets/8b8baab8-bc0a-405f-ba31-75c023e66be7" width="300">
- <img src="https://github.com/user-attachments/assets/bb38b833-54bc-406d-a2d3-03ebe75b7a3a" width="200">
+```text
+/mnt/us/extensions/KindleTeleSync
+/mnt/us/koreader/plugins/KindleTeleSync.koplugin
 ```
-</details> 
+
+## KOReader
+
+Open **Main menu → KindleTeleSync**.
+
+Available actions include:
+
+- **Sync now**
+- **Test Telegram**
+- **Run diagnostics**
+- **Settings**
+  - Bot token
+  - Chat ID
+  - Allowed extensions
+  - Download directory
+  - safety limits and timeouts
+  - Telegram summary notifications
+  - SOCKS5 / HTTP CONNECT / MTProto proxy settings
+  - reset Telegram synchronization state
+  - browser-based settings
+- **Update KindleTeleSync**
+- **Show version**
+- **Show last log**
+
+The KOReader plugin intentionally remains Lua because KOReader plugins are Lua modules. It is only a UI adapter; synchronization, networking, updates, validation, diagnostics, locking and browser settings live in Go.
+
+## KUAL
+
+The KUAL menu exposes the same core Go commands directly:
+
+```text
+Sync now
+Test Telegram
+Open web settings
+Run diagnostics
+Update KindleTeleSync
+Show version
+```
+
+No shell wrapper scripts are required.
+
+## First synchronization
+
+On the first successful connection, KindleTeleSync stores the current Telegram update state and intentionally skips old history. This prevents every old attachment in the chat from being downloaded.
+
+After initialization:
+
+1. Send a new supported file to the bot.
+2. Run **Sync now** again.
+3. The file is downloaded to the configured directory.
+
+## Configuration
+
+The configuration file is:
+
+```text
+/mnt/us/extensions/KindleTeleSync/config.json
+```
+
+Default safety settings are:
+
+```json
+{
+  "allowed_extensions": [".epub", ".mobi", ".pdf", ".zip", ".fb2"],
+  "download_path": "/mnt/us/books",
+  "max_file_bytes": 104857600,
+  "max_files_per_sync": 20,
+  "max_total_bytes": 262144000,
+  "sync_timeout_seconds": 600,
+  "web_timeout_seconds": 180,
+  "send_notifications": true
+}
+```
+
+Existing configuration files from the reconstructed upstream version are migrated in memory by filling missing defaults. The file is written atomically with mode `0600` because it can contain a Telegram token and proxy credentials.
+
+The download directory must stay inside Kindle user storage. KindleTeleSync checks both the configured path and its resolved symbolic-link target before writing files.
+
+### Browser settings
+
+KOReader and KUAL can start a temporary settings server on port `8880`.
+
+The URL contains a random device-generated bearer token, for example:
+
+```text
+http://192.168.1.20:8880/?token=...
+```
+
+Secret fields are not pre-filled in the page. Leaving a secret field empty keeps its current value. The server automatically stops after the configured timeout and can also be stopped explicitly. The access token is removed when the session ends, so an old QR code or URL cannot be reused for a later session.
+
+The settings server uses HTTP on the local network, not TLS, so only run it on a network you trust and treat the complete tokenized URL as sensitive while it is active.
+
+## Safety limits
+
+KindleTeleSync checks Telegram document metadata before downloading a file. By default it rejects work that would exceed:
+
+- 100 MiB for one file.
+- 20 downloaded files in one synchronization run.
+- 250 MiB total downloaded data in one synchronization run.
+
+Partial output is removed when a download fails. Telegram filenames are reduced to their base name before a destination path is created. The resolved download directory is also confined to Kindle user storage to prevent symbolic-link escapes.
+
+## Proxy support
+
+Supported modes:
+
+- `socks5`
+- `http` using HTTP CONNECT
+- `mtproto`
+
+Telegram MTProto depends on a reasonably correct clock. KindleTeleSync tries NTP synchronization before synchronization and before a Telegram connection test, and reports clock skew in diagnostics.
+
+## Unified command line
+
+The package contains one executable:
+
+```text
+kindletelesync sync [--json]
+kindletelesync test [--json]
+kindletelesync diagnostics [--json]
+kindletelesync update [--prerelease] [--json]
+kindletelesync web [--kindle-ui]
+kindletelesync web-url
+kindletelesync web-stop [--json]
+kindletelesync version [--json]
+```
+
+`--json` returns a stable result envelope used by the KOReader plugin, including downloaded files, skipped items, errors and diagnostic details.
+
+## Updates
+
+By default, `kindletelesync update` follows the latest **stable** GitHub release. For release-candidate testing, `kindletelesync update --prerelease` also considers published prereleases. This makes it possible to install RC1 manually and then exercise the real self-update path when RC2 is published.
+
+Semantic version comparison is used before installation. KindleTeleSync refuses to replace a newer installed version with an older release, so running the stable updater from an RC cannot accidentally downgrade the device.
+
+The updater:
+
+1. Queries the selected release channel from `dpolarov/KindleTeleSync-re`.
+2. Detects the device ARM capability and selects the matching build, or the universal fallback.
+3. Downloads `SHA256SUMS`.
+4. Downloads the release archive with a size limit.
+5. Verifies its SHA-256 digest.
+6. Rejects path traversal and unsupported archive entries.
+7. Preserves an existing user `config.json`.
+8. Replaces installed files atomically.
+9. Removes known files left by the older three-binary/shell-wrapper architecture.
+
+An update is refused if `SHA256SUMS` is missing or the checksum does not match. SHA-256 provides release-asset integrity verification; it is not a separate publisher-signature system.
+
+## Diagnostics
+
+`kindletelesync diagnostics` checks, among other things:
+
+- configuration validity;
+- download-directory write access and resolved path confinement;
+- configured safety limits;
+- NTP clock skew;
+- DNS availability;
+- configuration file permissions;
+- free storage space;
+- detected GOARM target;
+- Linux kernel release and the release-build kernel baseline;
+- installed binary information.
+
+`kindletelesync test` performs a real Telegram bot login, low-level ping and sends a test message to the configured chat.
+
+## Logs
+
+Runtime logs are stored in:
+
+```text
+/mnt/us/extensions/KindleTeleSync/sync.log
+```
+
+The Go executable rotates it at approximately 5 MiB to `sync.log.1`. The most recent structured command result is stored in `last_result.json` with private permissions.
+
+## Building locally
+
+Release compatibility is intentionally pinned to **Go 1.23.12**. Do not silently rebuild release binaries with a newer Go toolchain without re-evaluating the minimum Linux kernel required by that Go release.
+
+Run checks:
+
+```bash
+GOTOOLCHAIN=local go mod tidy
+gofmt -w cmd internal
+go vet ./...
+go test ./...
+go test -race ./cmd/kindletelesync ./internal/config
+```
+
+Build for ARMv7:
+
+```bash
+GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+  go build -trimpath -o kindletelesync ./cmd/kindletelesync
+```
+
+Build for ARMv6 by changing `GOARM=7` to `GOARM=6`.
+
+GitHub Actions pins Go 1.23.12 with `GOTOOLCHAIN=local`, checks formatting and the tidy module graph, runs `go vet`, unit tests and race tests, then cross-builds both ARMv6 and ARMv7. Tagged `v*` releases publish stable builds. Branches named `rc/v*` publish GitHub prereleases for device testing. Both paths publish ARMv6, ARMv7 and universal archives plus `SHA256SUMS`. Release binaries are not UPX-packed.
+
+## Project layout
+
+```text
+cmd/kindletelesync   unified Go application
+internal/config      configuration and migration logic
+build/package        KUAL and KOReader release package skeleton
+```
+
+## Credits
+
+Original KindleTeleSync concept and package: **XroM**.
+
+Reconstructed project: **antikuz**.
+
+This fork and ongoing maintenance: **dpolarov**.
+
+Thanks to the original testers and community members who documented the behavior of the lost-source version.

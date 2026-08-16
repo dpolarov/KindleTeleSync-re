@@ -4,14 +4,18 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'rc/**'
 
 permissions:
   contents: write
 
-jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
+env:
+  GOTOOLCHAIN: local
 
+jobs:
+  build:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         goarm: [6, 7]
@@ -23,87 +27,137 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.23.12'
+          cache: true
 
-      - name: Install UPX
-        run: sudo apt-get install -y upx
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="${GITHUB_REF_NAME#rc/}"
+          fi
+          if [[ "$TAG" != v* ]]; then
+            echo "Release tag must start with v, got: $TAG" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build binaries (GOARM ${{ matrix.goarm }})
+      - name: Test
+        run: go test ./...
+
+      - name: Build KindleTeleSync (GOARM ${{ matrix.goarm }})
         env:
           GOOS: linux
           GOARCH: arm
           GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: 0
-        run: |
-          FLAGS="-s -w -extldflags=-static -X main.GoArmVersion=$GOARM"
-          DEST="build/package/extensions/KindleTeleSync"
-
-          go build -trimpath -ldflags="$FLAGS" -o "$DEST/kindle_sync_d" ./cmd/kindle_sync_d
-          go build -trimpath -ldflags="$FLAGS" -o "$DEST/updater"       ./cmd/updater
-          go build -trimpath -ldflags="$FLAGS" -o "$DEST/webconfig"     ./cmd/webconfig
-
-      - name: Compress with UPX
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           DEST="build/package/extensions/KindleTeleSync"
-          upx --best --lzma "$DEST/kindle_sync_d" "$DEST/updater" "$DEST/webconfig"
+          FLAGS="-s -w -X main.GoArmVersion=$GOARM -X main.Version=$VERSION -X main.RepoPath=${{ github.repository }}"
+          go build -trimpath -ldflags="$FLAGS" -o "$DEST/kindletelesync" ./cmd/kindletelesync
+          chmod +x "$DEST/kindletelesync"
 
-      - name: Set executable bit on binaries and shell scripts
+      - name: Prepare package metadata
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           DEST="build/package/extensions/KindleTeleSync"
-          chmod +x "$DEST/kindle_sync_d" "$DEST/updater" "$DEST/webconfig"
-          chmod +x $DEST/*.sh
+          cp README.md "$DEST/README.md"
+          sed -i -E "s|<version>[^<]+</version>|<version>${VERSION}</version>|" "$DEST/config.xml"
+          sed -i -E "s|<author>[^<]+</author>|<author>dpolarov</author>|" "$DEST/config.xml"
+          echo "$VERSION" > "$DEST/version.txt"
 
-      - name: Copy README into package
-        run: cp README.md build/package/extensions/KindleTeleSync/README.md
-      
-      - name: Patch version.txt and config.xml with version and author
-        run: |
-          CONFIG="build/package/extensions/KindleTeleSync/config.xml"
-          VERSION_TXT="build/package/extensions/KindleTeleSync/version.txt"
-          TAG="${{ github.ref_name }}"
-          sed -i "s|<version>1.2.5</version>|<version>${TAG}</version>|" "$CONFIG"
-          sed -i "s|<author>XroM</author>|<author>antikuz</author>|" "$CONFIG"
-          echo $TAG > "$VERSION_TXT"
-      
-      - name: Create release archive (GOARM ${{ matrix.goarm }})
+      - name: Create architecture release archive
         run: |
           ARCHIVE="KindleTeleSync-arm${{ matrix.goarm }}.tar.gz"
-          cd build/package
-          tar -czf "../../$ARCHIVE" extensions koreader
-          cd ../..
+          tar -C build/package -czf "$ARCHIVE" extensions koreader
 
-      - name: Upload archive as artifact
+      - name: Build runtime-detecting universal archive
+        if: matrix.goarm == 6
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 6
+          CGO_ENABLED: 0
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          DEST="build/package/extensions/KindleTeleSync"
+          FLAGS="-s -w -X main.GoArmVersion=auto -X main.Version=$VERSION -X main.RepoPath=${{ github.repository }}"
+          go build -trimpath -ldflags="$FLAGS" -o "$DEST/kindletelesync" ./cmd/kindletelesync
+          chmod +x "$DEST/kindletelesync"
+          tar -C build/package -czf KindleTeleSync-universal.tar.gz extensions koreader
+
+      - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
           name: KindleTeleSync-arm${{ matrix.goarm }}
-          path: KindleTeleSync-arm${{ matrix.goarm }}.tar.gz
+          path: |
+            KindleTeleSync-arm${{ matrix.goarm }}.tar.gz
+            KindleTeleSync-universal.tar.gz
+          if-no-files-found: ignore
 
   release:
     runs-on: ubuntu-latest
-    needs: build-and-release
-
+    needs: build
     steps:
-      - name: Download all artifacts
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+            PRERELEASE=false
+          else
+            TAG="${GITHUB_REF_NAME#rc/}"
+            PRERELEASE=true
+          fi
+          if [[ "$TAG" != v* ]]; then
+            echo "Release tag must start with v, got: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Download all archives
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          sha256sum KindleTeleSync-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          files: |
+            dist/KindleTeleSync-*.tar.gz
+            dist/SHA256SUMS
           generate_release_notes: true
           body: |
-            ## KindleTeleSync ${{ github.ref_name }}
+            ## KindleTeleSync ${{ steps.meta.outputs.tag }}
 
-            ### Changes
-            ${{ steps.changelog.outputs.changes }}
+            These builds target Go 1.23's Linux baseline (kernel 2.6.32 or newer).
 
-            ### Installation
+            Download one archive and extract it to `/mnt/us`:
+            - `KindleTeleSync-arm7.tar.gz` — optimized for ARMv7 Kindles
+            - `KindleTeleSync-arm6.tar.gz` — optimized for ARMv6 Kindles with a compatible kernel
+            - `KindleTeleSync-universal.tar.gz` — conservative ARMv6-compatible build with runtime ARM detection
 
-            Download the tarball matching your Kindle's ARM version:
-            - `KindleTeleSync-arm7.tar.gz` — most Kindles (Paperwhite 3+, Oasis, etc.)
-            - `KindleTeleSync-arm6.tar.gz` — older Kindles
+            RC builds are published as GitHub prereleases. From an installed RC, use `kindletelesync update --prerelease` to test updates to a newer RC.
 
-            Extract to `/mnt/us`
+            Very old Kindles running Linux 2.6.31 are not supported by the Go runtime used for these builds.
+            Every archive is verified by the built-in updater against the attached `SHA256SUMS` file.
+            Restart KOReader after installing an update so the plugin UI is reloaded.
