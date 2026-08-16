@@ -16,7 +16,8 @@ This repository is a maintained reconstruction of the original KindleTeleSync pr
 - Diagnostics and Telegram connection tests.
 - Operation lock to prevent simultaneous sync/update/settings jobs.
 - Built-in log rotation.
-- Self-update from releases in this fork.
+- Self-update from stable releases, with an explicit prerelease channel for RC testing.
+- Semantic version ordering prevents accidental downgrade from an RC to an older stable release.
 - SHA-256 verification before an update archive is installed.
 - ARMv6 and ARMv7 release builds, plus a conservative universal archive.
 - Go 1.23 build baseline retained for compatibility with older Kindle Linux kernels.
@@ -180,7 +181,7 @@ The package contains one executable:
 kindletelesync sync [--json]
 kindletelesync test [--json]
 kindletelesync diagnostics [--json]
-kindletelesync update [--json]
+kindletelesync update [--prerelease] [--json]
 kindletelesync web [--kindle-ui]
 kindletelesync web-url
 kindletelesync web-stop [--json]
@@ -191,9 +192,13 @@ kindletelesync version [--json]
 
 ## Updates
 
+By default, `kindletelesync update` follows the latest **stable** GitHub release. For release-candidate testing, `kindletelesync update --prerelease` also considers published prereleases. This makes it possible to install RC1 manually and then exercise the real self-update path when RC2 is published.
+
+Semantic version comparison is used before installation. KindleTeleSync refuses to replace a newer installed version with an older release, so running the stable updater from an RC cannot accidentally downgrade the device.
+
 The updater:
 
-1. Queries the latest release from `dpolarov/KindleTeleSync-re`.
+1. Queries the selected release channel from `dpolarov/KindleTeleSync-re`.
 2. Detects the device ARM capability and selects the matching build, or the universal fallback.
 3. Downloads `SHA256SUMS`.
 4. Downloads the release archive with a size limit.
@@ -255,7 +260,7 @@ GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
 
 Build for ARMv6 by changing `GOARM=7` to `GOARM=6`.
 
-GitHub Actions pins Go 1.23.12 with `GOTOOLCHAIN=local`, checks formatting and the tidy module graph, runs `go vet`, unit tests and race tests, then cross-builds both ARMv6 and ARMv7. Tagged releases publish both architecture archives, a conservative universal archive and `SHA256SUMS` for the built-in updater. Release binaries are not UPX-packed.
+GitHub Actions pins Go 1.23.12 with `GOTOOLCHAIN=local`, checks formatting and the tidy module graph, runs `go vet`, unit tests and race tests, then cross-builds both ARMv6 and ARMv7. Tagged `v*` releases publish stable builds. Branches named `rc/v*` publish GitHub prereleases for device testing. Both paths publish ARMv6, ARMv7 and universal archives plus `SHA256SUMS`. Release binaries are not UPX-packed.
 
 ## Project layout
 
