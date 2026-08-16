@@ -19,6 +19,7 @@ This repository is a maintained reconstruction of the original KindleTeleSync pr
 - Self-update from releases in this fork.
 - SHA-256 verification before an update archive is installed.
 - ARMv6 and ARMv7 release builds, plus a conservative universal archive.
+- Go 1.23 build baseline retained for compatibility with older Kindle Linux kernels.
 
 ## Requirements
 
@@ -27,16 +28,29 @@ This repository is a maintained reconstruction of the original KindleTeleSync pr
 - Wi-Fi access.
 - A Telegram bot token created with BotFather.
 - The Telegram chat ID used with that bot.
+- Linux kernel 2.6.32 or newer for the Go runtime used by release builds.
 
 The reconstructed application has primarily been tested on newer ARMv7 Kindles. Device-specific testing is still recommended, especially on older ARMv6 models.
+
+### Kindle kernel compatibility
+
+Release binaries are intentionally built with **Go 1.23.12** and `GOTOOLCHAIN=local`. Go 1.23 supports Linux kernels starting at 2.6.32, while newer Go releases raise the Linux baseline and would exclude several otherwise capable older Kindles.
+
+This means the ARM label alone is not enough to determine compatibility:
+
+- ARMv7 Kindles using Linux 3.x or newer are within the runtime baseline.
+- ARMv6 devices are supported only when their Linux kernel is at least 2.6.32.
+- Very old Kindles using Linux 2.6.31 are **not supported** by these Go binaries even if the CPU can execute an ARMv6 build.
+
+Run `kindletelesync diagnostics` on an installed build to see the detected CPU target and kernel release.
 
 ## Installation
 
 1. Open the latest GitHub release.
 2. Download one archive:
-   - `KindleTeleSync-arm7.tar.gz` — optimized for newer ARMv7 Kindles.
-   - `KindleTeleSync-arm6.tar.gz` — optimized for older ARMv6 Kindles.
-   - `KindleTeleSync-universal.tar.gz` — conservative ARMv6 build intended for maximum compatibility.
+   - `KindleTeleSync-arm7.tar.gz` — optimized for ARMv7 Kindles.
+   - `KindleTeleSync-arm6.tar.gz` — optimized for ARMv6 Kindles whose kernel meets the requirement above.
+   - `KindleTeleSync-universal.tar.gz` — conservative ARMv6-compatible CPU build with runtime ARM detection; it still requires Linux 2.6.32 or newer.
 3. Extract the archive into `/mnt/us` on the Kindle.
 4. Restart KOReader if its plugin was already loaded.
 
@@ -122,6 +136,8 @@ Default safety settings are:
 
 Existing configuration files from the reconstructed upstream version are migrated in memory by filling missing defaults. The file is written atomically with mode `0600` because it can contain a Telegram token and proxy credentials.
 
+The download directory must stay inside Kindle user storage. KindleTeleSync checks both the configured path and its resolved symbolic-link target before writing files.
+
 ### Browser settings
 
 KOReader and KUAL can start a temporary settings server on port `8880`.
@@ -132,7 +148,7 @@ The URL contains a random device-generated bearer token, for example:
 http://192.168.1.20:8880/?token=...
 ```
 
-Secret fields are not pre-filled in the page. Leaving a secret field empty keeps its current value. The server automatically stops after the configured timeout and can also be stopped explicitly.
+Secret fields are not pre-filled in the page. Leaving a secret field empty keeps its current value. The server automatically stops after the configured timeout and can also be stopped explicitly. The access token is removed when the session ends, so an old QR code or URL cannot be reused for a later session.
 
 The settings server uses HTTP on the local network, not TLS, so only run it on a network you trust and treat the complete tokenized URL as sensitive while it is active.
 
@@ -144,7 +160,7 @@ KindleTeleSync checks Telegram document metadata before downloading a file. By d
 - 20 downloaded files in one synchronization run.
 - 250 MiB total downloaded data in one synchronization run.
 
-Partial output is removed when a download fails. Telegram filenames are reduced to their base name before a destination path is created.
+Partial output is removed when a download fails. Telegram filenames are reduced to their base name before a destination path is created. The resolved download directory is also confined to Kindle user storage to prevent symbolic-link escapes.
 
 ## Proxy support
 
@@ -154,7 +170,7 @@ Supported modes:
 - `http` using HTTP CONNECT
 - `mtproto`
 
-Telegram MTProto depends on a reasonably correct clock. KindleTeleSync tries NTP synchronization before synchronization and reports clock skew in diagnostics.
+Telegram MTProto depends on a reasonably correct clock. KindleTeleSync tries NTP synchronization before synchronization and before a Telegram connection test, and reports clock skew in diagnostics.
 
 ## Unified command line
 
@@ -178,28 +194,31 @@ kindletelesync version [--json]
 The updater:
 
 1. Queries the latest release from `dpolarov/KindleTeleSync-re`.
-2. Selects the ARM build matching the executable, or the universal fallback.
+2. Detects the device ARM capability and selects the matching build, or the universal fallback.
 3. Downloads `SHA256SUMS`.
 4. Downloads the release archive with a size limit.
 5. Verifies its SHA-256 digest.
-6. Rejects path traversal, symbolic links and unsupported archive entries.
+6. Rejects path traversal and unsupported archive entries.
 7. Preserves an existing user `config.json`.
 8. Replaces installed files atomically.
+9. Removes known files left by the older three-binary/shell-wrapper architecture.
 
-An update is refused if `SHA256SUMS` is missing or the checksum does not match.
+An update is refused if `SHA256SUMS` is missing or the checksum does not match. SHA-256 provides release-asset integrity verification; it is not a separate publisher-signature system.
 
 ## Diagnostics
 
 `kindletelesync diagnostics` checks, among other things:
 
 - configuration validity;
-- download-directory write access;
+- download-directory write access and resolved path confinement;
 - configured safety limits;
 - NTP clock skew;
 - DNS availability;
 - configuration file permissions;
 - free storage space;
-- detected GOARM target and installed binary information.
+- detected GOARM target;
+- Linux kernel release and the release-build kernel baseline;
+- installed binary information.
 
 `kindletelesync test` performs a real Telegram bot login, low-level ping and sends a test message to the configured chat.
 
@@ -215,26 +234,28 @@ The Go executable rotates it at approximately 5 MiB to `sync.log.1`. The most re
 
 ## Building locally
 
-The Go version is defined in `go.mod`.
+Release compatibility is intentionally pinned to **Go 1.23.12**. Do not silently rebuild release binaries with a newer Go toolchain without re-evaluating the minimum Linux kernel required by that Go release.
 
 Run checks:
 
 ```bash
+GOTOOLCHAIN=local go mod tidy
 gofmt -w cmd internal
 go vet ./...
 go test ./...
+go test -race ./cmd/kindletelesync ./internal/config
 ```
 
 Build for ARMv7:
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
   go build -trimpath -o kindletelesync ./cmd/kindletelesync
 ```
 
 Build for ARMv6 by changing `GOARM=7` to `GOARM=6`.
 
-GitHub Actions runs host tests plus both ARM cross-builds on pull requests. Tagged releases build and compress both architectures and publish `SHA256SUMS` for the built-in updater.
+GitHub Actions pins Go 1.23.12 with `GOTOOLCHAIN=local`, checks formatting and the tidy module graph, runs `go vet`, unit tests and race tests, then cross-builds both ARMv6 and ARMv7. Tagged releases publish both architecture archives, a conservative universal archive and `SHA256SUMS` for the built-in updater. Release binaries are not UPX-packed.
 
 ## Project layout
 
