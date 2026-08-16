@@ -69,18 +69,37 @@ func processExists(pid int) bool {
 }
 
 func effectiveGOARM() string {
-	if GoArmVersion == "6" || GoArmVersion == "7" {
-		return GoArmVersion
+	if b, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+		text := strings.ToLower(string(b))
+		if strings.Contains(text, "armv7") || strings.Contains(text, "vfpv3") || strings.Contains(text, " neon ") {
+			return "7"
+		}
+		if strings.Contains(text, "armv6") || strings.Contains(text, "armv5") {
+			return "6"
+		}
 	}
-	b, err := os.ReadFile("/proc/cpuinfo")
-	if err != nil {
-		return "6"
-	}
-	text := strings.ToLower(string(b))
-	if strings.Contains(text, "armv7") || strings.Contains(text, "vfpv3") || strings.Contains(text, " neon ") {
+	if GoArmVersion == "7" {
 		return "7"
 	}
 	return "6"
+}
+
+func kernelRelease() string {
+	var u syscall.Utsname
+	if err := syscall.Uname(&u); err != nil {
+		return "unknown"
+	}
+	buf := make([]byte, 0, len(u.Release))
+	for _, c := range u.Release {
+		if c == 0 {
+			break
+		}
+		buf = append(buf, byte(c))
+	}
+	if len(buf) == 0 {
+		return "unknown"
+	}
+	return string(buf)
 }
 
 func localIP() string {
@@ -149,6 +168,20 @@ func ensureWritableDirectory(path string) error {
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return err
 	}
+
+	rootReal, err := filepath.EvalSymlinks(config.KindleRoot())
+	if err != nil {
+		return fmt.Errorf("resolve Kindle storage root: %w", err)
+	}
+	pathReal, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve download directory: %w", err)
+	}
+	rel, err := filepath.Rel(rootReal, pathReal)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("resolved download path %q is outside Kindle storage %q", pathReal, rootReal)
+	}
+
 	name := filepath.Join(path, ".kindletelesync-write-test-"+strconv.Itoa(os.Getpid()))
 	if err := os.WriteFile(name, []byte("ok\n"), 0600); err != nil {
 		return err
