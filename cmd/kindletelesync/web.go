@@ -36,7 +36,7 @@ type pageData struct {
 	MaxTotalMB        int64
 }
 
-func tokenPath() string { return filepath.Join(config.AppDir(), ".web-token") }
+func tokenPath() string  { return filepath.Join(config.AppDir(), ".web-token") }
 func webPIDPath() string { return filepath.Join(config.AppDir(), ".web.pid") }
 
 func webToken() (string, error) {
