@@ -59,12 +59,12 @@ func TestWebSaveKeepsBlankSecrets(t *testing.T) {
 	}
 
 	form := url.Values{
-		"token":              {"secret-token"},
-		"bot_token":          {""},
-		"chat_id":            {"12345"},
-		"allowed_extensions": {".epub, .pdf"},
-		"download_path":      {root + "/books"},
-		"proxy_password":     {""},
+		"token":                {"secret-token"},
+		"bot_token":            {""},
+		"chat_id":              {"12345"},
+		"allowed_extensions":   {".epub, .pdf"},
+		"download_path":        {root + "/books"},
+		"proxy_password":       {""},
 		"proxy_mtproto_secret": {""},
 	}
 	req := httptest.NewRequest(http.MethodPost, "http://kindle/save?token=secret-token", strings.NewReader(form.Encode()))
