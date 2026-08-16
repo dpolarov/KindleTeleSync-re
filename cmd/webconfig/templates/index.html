@@ -1,98 +1,84 @@
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Настройка Telegram</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KindleTeleSync settings</title>
   <style>
-    body { font-family: Arial, sans-serif; background-color: #f2f2f2; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px;}
-    .container { background-color: #fff; padding: 30px 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 450px; width: 100%;}
-    h2 { margin-bottom: 20px; color: #333; }
-    input[type="text"], input[type="password"], select { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; box-sizing: border-box;}
-    input[type="submit"] { background-color: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 16px; transition: background-color 0.3s ease; width: 100%;}
-    input[type="submit"]:hover { background-color: #45a049; }
-    p { margin-top: 15px; color: #666; font-size: 14px;}
-    a { color: #2196F3; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .proxy-section { text-align: left; background: #fafafa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px;}
-    .hidden { display: none; }
+    body { font-family: Arial, sans-serif; background:#f2f2f2; margin:0; padding:20px; color:#222; }
+    .container { background:#fff; max-width:520px; margin:0 auto; padding:28px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.1); }
+    h1 { font-size:24px; margin-top:0; }
+    label { display:block; margin:12px 0 6px; font-weight:600; }
+    input[type=text], input[type=password], select { width:100%; padding:10px; border:1px solid #bbb; border-radius:7px; box-sizing:border-box; font-size:16px; }
+    .row { display:flex; gap:10px; align-items:center; margin-top:14px; }
+    .row label { margin:0; font-weight:600; }
+    .proxy { margin-top:18px; padding:14px; border:1px solid #ddd; border-radius:8px; background:#fafafa; }
+    button { width:100%; margin-top:20px; padding:11px; border:0; border-radius:7px; background:#2f6fed; color:#fff; font-size:16px; cursor:pointer; }
+    .note { font-size:13px; color:#666; line-height:1.45; }
   </style>
   <script>
     function toggleProxy() {
-      var enabled = document.getElementById("proxy_enabled").checked;
-      document.getElementById("proxy_details").style.display = enabled ? "block" : "none";
+      const enabled = document.getElementById('proxy_enabled').checked;
+      document.getElementById('proxy_details').style.display = enabled ? 'block' : 'none';
       toggleProxyType();
     }
     function toggleProxyType() {
-      var pType = document.getElementById("proxy_type").value;
-      var mtprotoFields = document.getElementById("mtproto_fields");
-      var authFields = document.getElementById("auth_fields");
-      if (pType === "mtproto") {
-        mtprotoFields.style.display = "block";
-        authFields.style.display = "none";
-      } else {
-        mtprotoFields.style.display = "none";
-        authFields.style.display = "block";
-      }
+      const type = document.getElementById('proxy_type').value;
+      document.getElementById('mtproto_fields').style.display = type === 'mtproto' ? 'block' : 'none';
+      document.getElementById('auth_fields').style.display = type === 'mtproto' ? 'none' : 'block';
     }
-    window.onload = toggleProxy;
+    window.addEventListener('load', toggleProxy);
   </script>
 </head>
 <body>
-  <div class="container">
-    <h2>Введите следующие настройки</h2>
-    <form action="/save" method="POST">
-      <label>Bot token:<br>
-        <input type="text" name="bot_token" placeholder="123456:ABC-DEF1234ghIkl..." value="{{.BotToken}}" required />
-      </label>
-      <label>Chat ID:<br>
-        <input type="text" name="chat_id" placeholder="-10023456..." value="{{.ChatID}}" required />
-      </label>
-      <label>Расширения для синхронизации:<br>
-        <input type="text" name="allowed_extensions" placeholder=".pdf,.epub,.txt" value="{{ index .AllowedExtensions 0 }}" />
-      </label>
-      <label>Папка для загрузки:<br>
-        <input type="text" name="download_path" placeholder="/mnt/us/books" value="{{.DownloadPath}}" />
-      </label>
+<div class="container">
+  <h1>KindleTeleSync settings</h1>
+  <form action="/save?token={{.Token}}" method="post">
+    <label for="bot_token">Telegram bot token</label>
+    <input id="bot_token" type="password" name="bot_token" value="{{.Config.BotToken}}" autocomplete="off" required>
 
-      <div class="proxy-section">
-        <label>
-          <input type="checkbox" id="proxy_enabled" name="proxy_enabled" {{if .Proxy.Enabled}}checked{{end}} onchange="toggleProxy()" />
-          Использовать Прокси
-        </label>
-        
-        <div id="proxy_details" style="margin-top: 10px;">
-          <label>Тип:
-            <select id="proxy_type" name="proxy_type" onchange="toggleProxyType()">
-              <option value="socks5" {{if eq .Proxy.Type "socks5"}}selected{{end}}>SOCKS5</option>
-              <option value="http" {{if eq .Proxy.Type "http"}}selected{{end}}>HTTP</option>
-              <option value="mtproto" {{if eq .Proxy.Type "mtproto"}}selected{{end}}>MTProto</option>
-            </select>
-          </label>
-          <label>Адрес (IP:Port):
-            <input type="text" name="proxy_address" value="{{.Proxy.Address}}" placeholder="127.0.0.1:1080" />
-          </label>
-          <div id="auth_fields">
-            <label>Имя пользователя:
-              <input type="text" name="proxy_username" value="{{.Proxy.Username}}" />
-            </label>
-            <label>Пароль:
-              <input type="password" name="proxy_password" value="{{.Proxy.Password}}" />
-            </label>
-          </div>
-          <div id="mtproto_fields">
-            <label>MTProto Secret:
-              <input type="text" name="proxy_mtproto_secret" value="{{.Proxy.MTProtoSecret}}" placeholder="d41d8cd98f00b204e9800998ecf8427e" />
-            </label>
-          </div>
+    <label for="chat_id">Chat ID</label>
+    <input id="chat_id" type="text" name="chat_id" value="{{.Config.ChatID}}" placeholder="123456789" required>
+
+    <label for="allowed_extensions">Allowed file extensions</label>
+    <input id="allowed_extensions" type="text" name="allowed_extensions" value="{{.AllowedExtensions}}" placeholder=".epub, .mobi, .pdf, .fb2">
+
+    <label for="download_path">Download directory</label>
+    <input id="download_path" type="text" name="download_path" value="{{.Config.DownloadPath}}" placeholder="/mnt/us/books">
+
+    <div class="proxy">
+      <div class="row">
+        <input id="proxy_enabled" type="checkbox" name="proxy_enabled" {{if .Config.Proxy.Enabled}}checked{{end}} onchange="toggleProxy()">
+        <label for="proxy_enabled">Use a proxy</label>
+      </div>
+      <div id="proxy_details">
+        <label for="proxy_type">Proxy type</label>
+        <select id="proxy_type" name="proxy_type" onchange="toggleProxyType()">
+          <option value="socks5" {{if eq .Config.Proxy.Type "socks5"}}selected{{end}}>SOCKS5</option>
+          <option value="http" {{if eq .Config.Proxy.Type "http"}}selected{{end}}>HTTP CONNECT</option>
+          <option value="mtproto" {{if eq .Config.Proxy.Type "mtproto"}}selected{{end}}>MTProto</option>
+        </select>
+
+        <label for="proxy_address">Proxy address</label>
+        <input id="proxy_address" type="text" name="proxy_address" value="{{.Config.Proxy.Address}}" placeholder="127.0.0.1:1080">
+
+        <div id="auth_fields">
+          <label for="proxy_username">Username</label>
+          <input id="proxy_username" type="text" name="proxy_username" value="{{.Config.Proxy.Username}}">
+          <label for="proxy_password">Password</label>
+          <input id="proxy_password" type="password" name="proxy_password" value="{{.Config.Proxy.Password}}" autocomplete="off">
+        </div>
+
+        <div id="mtproto_fields">
+          <label for="proxy_mtproto_secret">MTProto secret</label>
+          <input id="proxy_mtproto_secret" type="password" name="proxy_mtproto_secret" value="{{.Config.Proxy.MTProtoSecret}}" autocomplete="off">
         </div>
       </div>
+    </div>
 
-      <input type="submit" value="Сохранить" />
-    </form>
-    <p><a href="https://t.me/BotFather" target="_blank">BotFather</a> — нажмите <code>/newbot</code> для создания нового бота</p>
-    <p>Подробнее читай по ссылке на <a href="https://github.com/antikuz/KindleTeleSync-re" target="_blank">github</a> или <a href="https://4pda.to/forum/index.php?showtopic=541019&view=findpost&p=136391530" target="_blank">4pda</a></p>
-    <form action="/stop" method="POST">
-      <input type="submit" value="Остановить сервер" style="background-color: #f44336;">
-    </form>
-  </div>
+    <button type="submit">Save settings</button>
+  </form>
+  <p class="note">This page is protected by a device-generated access token. Anyone with the full URL can change the Telegram credentials while the settings server is running.</p>
+</div>
 </body>
 </html>
