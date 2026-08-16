@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'rc/**'
 
 permissions:
   contents: write
@@ -28,6 +30,23 @@ jobs:
           go-version: '1.23.12'
           cache: true
 
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="${GITHUB_REF_NAME#rc/}"
+          fi
+          if [[ "$TAG" != v* ]]; then
+            echo "Release tag must start with v, got: $TAG" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Test
         run: go test ./...
 
@@ -37,17 +56,18 @@ jobs:
           GOARCH: arm
           GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: 0
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           DEST="build/package/extensions/KindleTeleSync"
           FLAGS="-s -w -X main.GoArmVersion=$GOARM -X main.Version=$VERSION -X main.RepoPath=${{ github.repository }}"
           go build -trimpath -ldflags="$FLAGS" -o "$DEST/kindletelesync" ./cmd/kindletelesync
           chmod +x "$DEST/kindletelesync"
 
       - name: Prepare package metadata
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           DEST="build/package/extensions/KindleTeleSync"
-          VERSION="${GITHUB_REF_NAME#v}"
           cp README.md "$DEST/README.md"
           sed -i -E "s|<version>[^<]+</version>|<version>${VERSION}</version>|" "$DEST/config.xml"
           sed -i -E "s|<author>[^<]+</author>|<author>dpolarov</author>|" "$DEST/config.xml"
@@ -65,8 +85,8 @@ jobs:
           GOARCH: arm
           GOARM: 6
           CGO_ENABLED: 0
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           DEST="build/package/extensions/KindleTeleSync"
           FLAGS="-s -w -X main.GoArmVersion=auto -X main.Version=$VERSION -X main.RepoPath=${{ github.repository }}"
           go build -trimpath -ldflags="$FLAGS" -o "$DEST/kindletelesync" ./cmd/kindletelesync
@@ -86,6 +106,24 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+            PRERELEASE=false
+          else
+            TAG="${GITHUB_REF_NAME#rc/}"
+            PRERELEASE=true
+          fi
+          if [[ "$TAG" != v* ]]; then
+            echo "Release tag must start with v, got: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
       - name: Download all archives
         uses: actions/download-artifact@v4
         with:
@@ -101,12 +139,15 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           files: |
             dist/KindleTeleSync-*.tar.gz
             dist/SHA256SUMS
           generate_release_notes: true
           body: |
-            ## KindleTeleSync ${{ github.ref_name }}
+            ## KindleTeleSync ${{ steps.meta.outputs.tag }}
 
             These builds target Go 1.23's Linux baseline (kernel 2.6.32 or newer).
 
@@ -114,6 +155,8 @@ jobs:
             - `KindleTeleSync-arm7.tar.gz` — optimized for ARMv7 Kindles
             - `KindleTeleSync-arm6.tar.gz` — optimized for ARMv6 Kindles with a compatible kernel
             - `KindleTeleSync-universal.tar.gz` — conservative ARMv6-compatible build with runtime ARM detection
+
+            RC builds are published as GitHub prereleases. From an installed RC, use `kindletelesync update --prerelease` to test updates to a newer RC.
 
             Very old Kindles running Linux 2.6.31 are not supported by the Go runtime used for these builds.
             Every archive is verified by the built-in updater against the attached `SHA256SUMS` file.
