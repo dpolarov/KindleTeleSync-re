@@ -54,13 +54,26 @@ jobs:
           sed -i -E "s|<author>[^<]+</author>|<author>dpolarov</author>|" "$DEST/config.xml"
           echo "$VERSION" > "$DEST/version.txt"
 
-      - name: Create release archive
+      - name: Create architecture release archive
         run: |
           ARCHIVE="KindleTeleSync-arm${{ matrix.goarm }}.tar.gz"
           tar -C build/package -czf "$ARCHIVE" extensions koreader
-          if [ "${{ matrix.goarm }}" = "6" ]; then
-            cp "$ARCHIVE" KindleTeleSync-universal.tar.gz
-          fi
+
+      - name: Build runtime-detecting universal archive
+        if: matrix.goarm == 6
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 6
+          CGO_ENABLED: 0
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DEST="build/package/extensions/KindleTeleSync"
+          FLAGS="-s -w -X main.GoArmVersion=auto -X main.Version=$VERSION -X main.RepoPath=${{ github.repository }}"
+          go build -trimpath -ldflags="$FLAGS" -o "$DEST/kindletelesync" ./cmd/kindletelesync
+          chmod +x "$DEST/kindletelesync"
+          upx --best --lzma "$DEST/kindletelesync"
+          tar -C build/package -czf KindleTeleSync-universal.tar.gz extensions koreader
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
@@ -100,7 +113,7 @@ jobs:
             Download one archive and extract it to `/mnt/us`:
             - `KindleTeleSync-arm7.tar.gz` — optimized for newer ARMv7 Kindles
             - `KindleTeleSync-arm6.tar.gz` — optimized for older ARMv6 Kindles
-            - `KindleTeleSync-universal.tar.gz` — conservative ARMv6 build for maximum compatibility
+            - `KindleTeleSync-universal.tar.gz` — ARMv6-compatible build with runtime ARM detection for future updates
 
             Every archive is verified by the built-in updater against the attached `SHA256SUMS` file.
             Restart KOReader after installing an update so the plugin UI is reloaded.
