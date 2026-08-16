@@ -28,6 +28,15 @@ const (
 	appHash = "b18441a1ff607e10a989891a5462e627"
 )
 
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
 type syncStats struct {
 	downloaded []string
 	skipped    []string
@@ -186,6 +195,11 @@ func runTelegramTest() Result {
 	if err != nil {
 		return failure("test", "Proxy configuration error", err)
 	}
+	if server, err := syncClock(); err != nil {
+		log.Printf("Clock synchronization warning before Telegram test: %v", err)
+	} else {
+		log.Printf("Clock synchronized via %s before Telegram test", server)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
@@ -270,7 +284,8 @@ func httpProxyDialer(proxyAddr, user, pass string) func(context.Context, string,
 		if err := req.Write(conn); err != nil {
 			return nil, err
 		}
-		resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+		reader := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(reader, req)
 		if err != nil {
 			return nil, fmt.Errorf("read HTTP proxy response: %w", err)
 		}
@@ -281,7 +296,7 @@ func httpProxyDialer(proxyAddr, user, pass string) func(context.Context, string,
 			return nil, fmt.Errorf("HTTP proxy CONNECT failed: %s", resp.Status)
 		}
 		ok = true
-		return conn, nil
+		return &bufferedConn{Conn: conn, reader: reader}, nil
 	}
 }
 
@@ -412,11 +427,9 @@ func notificationText(stats *syncStats) string {
 
 func failure(action, message string, err error) Result {
 	text := message
-	if err != nil {
-		text += ": " + err.Error()
-	}
 	errorsList := []string{}
 	if err != nil {
+		text += ": " + err.Error()
 		errorsList = append(errorsList, err.Error())
 	}
 	return Result{OK: false, Action: action, Message: text, Errors: errorsList}
