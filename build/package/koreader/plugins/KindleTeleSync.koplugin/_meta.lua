@@ -1,6 +1,6 @@
 local _ = require("gettext")
 return {
-    name = "KindleTeleSync",
-    fullname = _("kindletelesync"),
-    description = _([[Transfer files to the device using your Telegarm bot.]]),
+    name = "kindletelesync",
+    fullname = _("KindleTeleSync"),
+    description = _([[Download supported files from a Telegram bot directly to your Kindle.]]),
 }
