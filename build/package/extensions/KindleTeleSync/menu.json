@@ -7,17 +7,32 @@
         {
           "name": "Sync now",
           "priority": 100,
-          "action": "./kindle_sync_d"
+          "action": "./kindletelesync sync"
+        },
+        {
+          "name": "Test Telegram",
+          "priority": 90,
+          "action": "./kindletelesync test"
         },
         {
           "name": "Open web settings",
-          "priority": 100,
-          "action": "./webconfig --kindle-ui"
+          "priority": 80,
+          "action": "./kindletelesync web --kindle-ui"
         },
         {
-          "name": "Check for updates",
-          "priority": 100,
-          "action": "./updater"
+          "name": "Run diagnostics",
+          "priority": 70,
+          "action": "./kindletelesync diagnostics"
+        },
+        {
+          "name": "Update KindleTeleSync",
+          "priority": 60,
+          "action": "./kindletelesync update"
+        },
+        {
+          "name": "Show version",
+          "priority": 50,
+          "action": "./kindletelesync version"
         }
       ]
     }
