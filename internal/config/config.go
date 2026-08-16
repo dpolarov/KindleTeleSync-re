@@ -2,14 +2,18 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
-const rootPath = "/mnt/us"
+const defaultKindleRoot = "/mnt/us"
 
 type ProxyConfig struct {
 	Enabled       bool   `json:"enabled"`
-	Type          string `json:"type"` // "socks5", "http", "mtproto"
+	Type          string `json:"type"` // socks5, http, mtproto
 	Address       string `json:"address"`
 	Username      string `json:"username"`
 	Password      string `json:"password"`
@@ -28,31 +32,34 @@ type Config struct {
 	AllowedExtensions []string             `json:"allowed_extensions"`
 	RootPath          string               `json:"root_path"`
 	DownloadPath      string               `json:"download_path"`
-	LastUpdateID      int                  `json:"last_update_id"`
+	LastUpdateID      int                  `json:"last_update_id,omitempty"`
 	Proxy             ProxyConfig          `json:"proxy"`
 	UpdatesState      TelegramUpdatesState `json:"updates_state"`
 }
 
+func KindleRoot() string {
+	if p := strings.TrimSpace(os.Getenv("KINDLE_ROOT")); p != "" {
+		return filepath.Clean(p)
+	}
+	return defaultKindleRoot
+}
+
+func AppDir() string {
+	return filepath.Join(KindleRoot(), "extensions", "KindleTeleSync")
+}
+
+func ConfigPath() string {
+	return filepath.Join(AppDir(), "config.json")
+}
+
 func DefaultConfig() *Config {
+	root := KindleRoot()
 	return &Config{
-		BotToken:          "",
-		ChatID:            0,
 		AllowedExtensions: []string{".epub", ".mobi", ".pdf", ".zip", ".fb2"},
-		RootPath:          rootPath,
-		DownloadPath:      "/mnt/us/books",
-		LastUpdateID:      0,
+		RootPath:          root,
+		DownloadPath:      filepath.Join(root, "books"),
 		Proxy: ProxyConfig{
-			Enabled:       false,
-			Type:          "socks5",
-			Address:       "",
-			Username:      "",
-			Password:      "",
-			MTProtoSecret: "",
-		},
-		UpdatesState: TelegramUpdatesState{
-			Pts:  0,
-			Date: 0,
-			Qts:  0,
+			Type: "socks5",
 		},
 	}
 }
@@ -62,23 +69,99 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, err
+
+	c := DefaultConfig()
+	if err := json.Unmarshal(b, c); err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
 	}
-	return &c, nil
+	c.Normalize()
+	return c, nil
+}
+
+func (c *Config) Normalize() {
+	if c.RootPath == "" {
+		c.RootPath = KindleRoot()
+	}
+	if c.DownloadPath == "" {
+		c.DownloadPath = filepath.Join(c.RootPath, "books")
+	}
+	if len(c.AllowedExtensions) == 0 {
+		c.AllowedExtensions = append([]string(nil), DefaultConfig().AllowedExtensions...)
+	}
+
+	seen := make(map[string]struct{}, len(c.AllowedExtensions))
+	normalized := make([]string, 0, len(c.AllowedExtensions))
+	for _, ext := range c.AllowedExtensions {
+		ext = strings.ToLower(strings.TrimSpace(ext))
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		if _, ok := seen[ext]; ok {
+			continue
+		}
+		seen[ext] = struct{}{}
+		normalized = append(normalized, ext)
+	}
+	c.AllowedExtensions = normalized
+	c.Proxy.Type = strings.ToLower(strings.TrimSpace(c.Proxy.Type))
+	if c.Proxy.Type == "" {
+		c.Proxy.Type = "socks5"
+	}
+}
+
+func (c *Config) ValidateForSync() error {
+	c.Normalize()
+	if strings.TrimSpace(c.BotToken) == "" {
+		return errors.New("bot token is empty")
+	}
+	if c.ChatID == 0 {
+		return errors.New("chat ID is empty")
+	}
+	if len(c.AllowedExtensions) == 0 {
+		return errors.New("allowed extensions list is empty")
+	}
+	if c.Proxy.Enabled {
+		if strings.TrimSpace(c.Proxy.Address) == "" {
+			return errors.New("proxy address is empty")
+		}
+		switch c.Proxy.Type {
+		case "socks5", "http":
+		case "mtproto":
+			if strings.TrimSpace(c.Proxy.MTProtoSecret) == "" {
+				return errors.New("MTProto proxy secret is empty")
+			}
+		default:
+			return fmt.Errorf("unsupported proxy type %q", c.Proxy.Type)
+		}
+	}
+	return nil
 }
 
 func (c *Config) Save(path string) error {
+	c.Normalize()
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
+	b = append(b, '\n')
 
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-
-	return os.Rename(tmpPath, path)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, b, 0600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Chmod(path, 0600)
 }
