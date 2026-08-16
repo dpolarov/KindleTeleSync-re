@@ -17,13 +17,13 @@ func runDiagnostics() Result {
 		Action:  "diagnostics",
 		Message: "Diagnostics completed successfully.",
 		Details: map[string]any{
-			"version":        Version,
-			"goarm":          effectiveGOARM(),
-			"kernel":         kernelRelease(),
-			"min_go_kernel":  "2.6.32",
-			"root":           config.KindleRoot(),
-			"app_dir":        config.AppDir(),
-			"local_ip":       localIP(),
+			"version":       Version,
+			"goarm":         effectiveGOARM(),
+			"kernel":        kernelRelease(),
+			"min_go_kernel": "2.6.32",
+			"root":          config.KindleRoot(),
+			"app_dir":       config.AppDir(),
+			"local_ip":      localIP(),
 		},
 	}
 
