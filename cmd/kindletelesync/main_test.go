@@ -63,6 +63,20 @@ func TestEffectiveGOARMBuildValue(t *testing.T) {
 	}
 }
 
+func TestEnsureWritableDirectoryRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	t.Setenv("KINDLE_ROOT", root)
+
+	link := filepath.Join(root, "books-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := ensureWritableDirectory(link); err == nil {
+		t.Fatal("symlink escaping Kindle root was accepted")
+	}
+}
+
 func TestWriteLastResultPermissions(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("KINDLE_ROOT", root)
