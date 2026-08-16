@@ -11,6 +11,14 @@ import (
 
 const defaultKindleRoot = "/mnt/us"
 
+const (
+	DefaultMaxFileBytes       int64 = 100 * 1024 * 1024
+	DefaultMaxTotalBytes      int64 = 250 * 1024 * 1024
+	DefaultMaxFilesPerSync          = 20
+	DefaultSyncTimeoutSeconds       = 600
+	DefaultWebTimeoutSeconds        = 180
+)
+
 type ProxyConfig struct {
 	Enabled       bool   `json:"enabled"`
 	Type          string `json:"type"` // socks5, http, mtproto
@@ -32,9 +40,14 @@ type Config struct {
 	AllowedExtensions []string             `json:"allowed_extensions"`
 	RootPath          string               `json:"root_path"`
 	DownloadPath      string               `json:"download_path"`
-	LastUpdateID      int                  `json:"last_update_id,omitempty"`
 	Proxy             ProxyConfig          `json:"proxy"`
 	UpdatesState      TelegramUpdatesState `json:"updates_state"`
+	MaxFileBytes      int64                `json:"max_file_bytes"`
+	MaxFilesPerSync   int                  `json:"max_files_per_sync"`
+	MaxTotalBytes     int64                `json:"max_total_bytes"`
+	SyncTimeout       int                  `json:"sync_timeout_seconds"`
+	WebTimeout        int                  `json:"web_timeout_seconds"`
+	SendNotifications bool                 `json:"send_notifications"`
 }
 
 func KindleRoot() string {
@@ -61,6 +74,12 @@ func DefaultConfig() *Config {
 		Proxy: ProxyConfig{
 			Type: "socks5",
 		},
+		MaxFileBytes:      DefaultMaxFileBytes,
+		MaxFilesPerSync:   DefaultMaxFilesPerSync,
+		MaxTotalBytes:     DefaultMaxTotalBytes,
+		SyncTimeout:       DefaultSyncTimeoutSeconds,
+		WebTimeout:        DefaultWebTimeoutSeconds,
+		SendNotifications: true,
 	}
 }
 
@@ -69,12 +88,28 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	_ = os.Chmod(path, 0600)
 
 	c := DefaultConfig()
 	if err := json.Unmarshal(b, c); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	c.Normalize()
+	return c, nil
+}
+
+func LoadOrCreate(path string) (*Config, error) {
+	c, err := Load(path)
+	if err == nil {
+		return c, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	c = DefaultConfig()
+	if err := c.Save(path); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -106,15 +141,31 @@ func (c *Config) Normalize() {
 		normalized = append(normalized, ext)
 	}
 	c.AllowedExtensions = normalized
+
 	c.Proxy.Type = strings.ToLower(strings.TrimSpace(c.Proxy.Type))
 	if c.Proxy.Type == "" {
 		c.Proxy.Type = "socks5"
+	}
+	if c.MaxFileBytes <= 0 {
+		c.MaxFileBytes = DefaultMaxFileBytes
+	}
+	if c.MaxFilesPerSync <= 0 {
+		c.MaxFilesPerSync = DefaultMaxFilesPerSync
+	}
+	if c.MaxTotalBytes <= 0 {
+		c.MaxTotalBytes = DefaultMaxTotalBytes
+	}
+	if c.SyncTimeout <= 0 {
+		c.SyncTimeout = DefaultSyncTimeoutSeconds
+	}
+	if c.WebTimeout <= 0 {
+		c.WebTimeout = DefaultWebTimeoutSeconds
 	}
 }
 
 func (c *Config) ValidateForSync() error {
 	c.Normalize()
-	if strings.TrimSpace(c.BotToken) == "" {
+	if strings.TrimSpace(c.BotToken) == "" || c.BotToken == "YOUR_TOKEN" {
 		return errors.New("bot token is empty")
 	}
 	if c.ChatID == 0 {
@@ -122,6 +173,9 @@ func (c *Config) ValidateForSync() error {
 	}
 	if len(c.AllowedExtensions) == 0 {
 		return errors.New("allowed extensions list is empty")
+	}
+	if strings.TrimSpace(c.DownloadPath) == "" {
+		return errors.New("download path is empty")
 	}
 	if c.Proxy.Enabled {
 		if strings.TrimSpace(c.Proxy.Address) == "" {
